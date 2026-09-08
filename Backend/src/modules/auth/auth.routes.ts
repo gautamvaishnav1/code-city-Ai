@@ -2,6 +2,8 @@ import { Router } from "express";
 import {
   register,
   login,
+  refresh,
+  logout,
   me,
   verifyOtp,
   resendOtp,
@@ -16,7 +18,7 @@ import {
 } from "./auth.controller";
 import { validate } from "../../shared/middleware/validate.middleware";
 import { requireAuth } from "../../shared/middleware/auth.middleware";
-import { authLimiter, otpLimiter } from "../../shared/middleware/rate-limiter.middleware";
+import { authLimiter, otpLimiter, refreshTokenLimiter } from "../../shared/middleware/rate-limiter.middleware";
 import {
   loginSchema,
   registerSchema,
@@ -24,6 +26,7 @@ import {
   resendOtpSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  refreshTokenSchema,
   googleAuthSchema,
   githubAuthSchema
 } from "./auth.validation";
@@ -34,6 +37,10 @@ const router = Router();
 
 router.post("/register", authLimiter, validate({ body: registerSchema }), register);
 router.post("/login", authLimiter, validate({ body: loginSchema }), login);
+
+// token lifecycle — rotation endpoint gets its own tight limit
+router.post("/refresh", refreshTokenLimiter, validate({ body: refreshTokenSchema }), refresh);
+router.post("/logout", validate({ body: refreshTokenSchema.partial() }), logout);
 
 // OTP flows — even tighter limit than login
 router.post("/verify-otp", otpLimiter, validate({ body: verifyOtpSchema }), verifyOtp);

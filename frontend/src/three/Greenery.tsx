@@ -77,7 +77,10 @@ export function Greenery() {
       const z = -30 + rnd() * 82;
       // keep off the highway corridors (west avenue x≈-42, trunk z≈-8)
       if (Math.abs(x + 42) < 4.5) continue;
-      if (Math.abs(z + 8) < 4.5 && x > -46) continue;
+      if (Math.abs(z + 8) < 7 && x > -50) continue;
+      // keep out of the district belt — nothing may spawn on district ring
+      // roads or their sidewalks (props belong NEAR roads, never ON them)
+      if (x > -72 && z < -4) continue;
       const r = rnd();
       out.push({
         kind: r < 0.5 ? "bush" : r < 0.82 ? "grass" : "rock",
@@ -96,6 +99,8 @@ export function Greenery() {
       const x = -98 + rnd() * 92;
       const z = -32 + rnd() * 86;
       if (Math.abs(x + 42) < 5) continue;
+      if (Math.abs(z + 8) < 6 && x > -50) continue; // trunk corridor
+      if (x > -72 && z < -4) continue; // district belt
       out.push({ p: [x, 0.015, z], r: 3 + rnd() * 6 });
     }
     return out;

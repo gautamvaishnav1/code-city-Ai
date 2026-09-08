@@ -12,6 +12,12 @@ export interface UserDocument extends mongoose.Document {
   githubId?: string | null;
   avatarUrl?: string | null;
   isVerified: boolean; // local users must verify via OTP
+  failedLoginAttempts: number; // brute-force lockout counters
+  lockUntil: Date | null; // while set in the future, login is refused
+  refreshToken?: {
+    tokenHash: string; // sha256 of the active refresh token
+    expiresAt: Date;
+  } | null;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidate: string): Promise<boolean>;
@@ -32,7 +38,17 @@ const userSchema = new mongoose.Schema<UserDocument>(
     googleId: { type: String, default: null },
     githubId: { type: String, default: null },
     avatarUrl: { type: String, default: null },
-    isVerified: { type: Boolean, default: false }
+    isVerified: { type: Boolean, default: false },
+    failedLoginAttempts: { type: Number, default: 0, select: false },
+    lockUntil: { type: Date, default: null, select: false },
+    refreshToken: {
+      type: {
+        tokenHash: { type: String, required: true },
+        expiresAt: { type: Date, required: true }
+      },
+      default: null,
+      select: false
+    }
   },
   { timestamps: true }
 );

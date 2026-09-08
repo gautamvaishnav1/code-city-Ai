@@ -3,6 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import * as THREE from "three";
 import type { CityLayout } from "../lib/layout";
+import { BRIDGE } from "../lib/layout";
 import { ENV } from "./env";
 import { SOLDIER, CHARACTERS } from "./assets";
 
@@ -110,25 +111,26 @@ function Bystander({ pos, seed }: { pos: [number, number]; mid?: boolean; seed: 
 export function People({ L }: { L: CityLayout }) {
   const paths = [
     ...L.people.map((p) => [p.a, p.b] as const),
-    // 2 extra walkers per avenue (west x=-42, east x=+42)
-    [[-42, -20], [-42, 30]] as const,
-    [[-42, 10], [-42, 52]] as const,
-    [[42, -14], [42, 34]] as const,
-    [[42, 8], [42, 44]] as const,
+    // 2 extra walkers per avenue — on the SIDWALKS beside the asphalt,
+    // never down the middle of the road
+    [[-46.6, -20], [-46.6, 30]] as const,
+    [[-46.6, 10], [-46.6, 52]] as const,
+    [[46.6, -14], [46.6, 34]] as const,
+    [[46.6, 8], [46.6, 44]] as const,
     // bridge crossing at deck height
-    [[-6, -8], [6, -8], 1.75] as any,
+    [[-6, -8], [6, -8], BRIDGE.deckTop + 0.12] as any,
   ];
   const spots = useMemo(() => {
     const out: [number, number][] = [];
-    L.districts.forEach((d) => { out.push([d.center[0] + 13, d.center[1] + 8], [d.center[0] - 12, d.center[1] - 9]); });
+    L.districts.forEach((d) => { out.push([d.center[0] + 14.6, d.center[1] + 8], [d.center[0] - 14.6, d.center[1] - 9]); });
     return out;
   }, [L]);
   const avenueWalkers = useMemo(
     () => [
-      { a: [-45.5, -26], b: [-38.5, 49] },
-      { a: [38.5, -26], b: [45.5, 41] },
-      { a: [-20, -14], b: [-64, -14] },   // trunk west of river
-      { a: [20, -14], b: [64, -14] },     // trunk east of river
+      { a: [-46.6, -26], b: [-46.6, 49] },
+      { a: [46.6, -26], b: [46.6, 41] },
+      { a: [-20, -12.2], b: [-64, -12.2] },  // trunk west of river (south sidewalk)
+      { a: [20, -12.2], b: [64, -12.2] },    // trunk east of river
     ],
     [],
   );
@@ -150,7 +152,9 @@ export function People({ L }: { L: CityLayout }) {
   );
 }
 
-/** pedestrian on the bridge deck — walks the span at y=1.75 */
+/** pedestrian on the bridge deck — walks the span at deck height (BRIDGE is
+    the single source of truth; this used to hardcode the old 1.75 deck and
+    pedestrians strolled through mid-air / the river) */
 function BridgeWalker({ a, b, y, seed }: { a: [number, number]; b: [number, number]; y: number; seed: number }) {
   const ref = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(SOLDIER);

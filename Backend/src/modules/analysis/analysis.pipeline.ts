@@ -2,6 +2,7 @@ import type { ProjectDocument } from "../projects/project.model";
 import { AnalysisModel } from "./analysis.model";
 import type { AnalysisDocument } from "./analysis.model";
 import { downloadAndExtractRepo } from "../../infrastructure/github/github.service";
+import { parseGitHubUrl } from "../../modules/repository/repo-url.util";
 import { loadDemoProject } from "./demo.source";
 import { parseRepository } from "../parser/parser.service";
 import { generateArchitecture } from "../ai/architect.service";
@@ -39,6 +40,72 @@ export async function startAnalysis(
 ): Promise<StartAnalysisResult> {
   if (inFlightProjects.has(String(project._id))) {
     throw ApiError.conflict("An analysis for this project is already running");
+  }
+
+  // ── Repo URL cache: if this GitHub repo was already analyzed by anyone,
+  //    clone the stored explanation into this project instead of re-running
+  //    the full pipeline (no download / parse / LLM round-trip).
+  let repoFullName: string | undefined;
+  try {
+    const parsed = parseGitHubUrl(project.repoUrl ?? "");
+    repoFullName = `${parsed.owner}/${parsed.repo}`;
+  } catch {
+    // demo:// or unusual URLs are not cacheable — run the normal pipeline
+  }
+
+  if (repoFullName) {
+    const cached = await AnalysisModel.findOne({
+      status: "completed",
+      "repoInfo.fullName": repoFullName
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (cached) {
+      const projectId = String(project._id);
+      const now = new Date();
+      const clone = await AnalysisModel.create({
+        project: project._id,
+        requestedBy: userId,
+        status: "completed",
+        repoInfo: cached.repoInfo,
+        stats: { ...(cached.stats ?? {}), cacheHit: true },
+        metadata: cached.metadata ?? undefined,
+        architecture: cached.architecture ?? undefined,
+        districts: cached.districts ?? undefined,
+        dependencies: cached.dependencies ?? undefined,
+        techStack: cached.techStack ?? undefined,
+        failures: [],
+        durationMs: cached.durationMs ?? 0,
+        startedAt: now,
+        completedAt: now
+      });
+
+      const { ProjectModel } = await import("../projects/project.model");
+      await ProjectModel.updateOne(
+        { _id: projectId },
+        { $set: { lastAnalysis: clone._id } }
+      ).exec();
+
+      emitToProject(projectId, "analysis:completed", {
+        analysisId: String(clone._id),
+        projectId,
+        stats: { ...(cached.stats ?? {}), cacheHit: true },
+        architecture: {
+          componentCount: (cached.architecture as Architecture | undefined)?.components.length ?? 0,
+          connectionCount: (cached.architecture as Architecture | undefined)?.connections.length ?? 0
+        },
+        engine: (cached.stats as Record<string, unknown> | undefined)?.aiEngine ?? "cached",
+        aiEngine: (cached.stats as Record<string, unknown> | undefined)?.aiEngine ?? "cached"
+      });
+
+      logger.info("Analysis served from repo cache", {
+        analysisId: String(clone._id),
+        repo: repoFullName,
+        sourceAnalysisId: String(cached._id)
+      });
+      return { analysisId: String(clone._id) };
+    }
   }
 
   const analysis = await AnalysisModel.create({

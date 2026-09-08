@@ -3,12 +3,19 @@ import { useFrame } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { CityLayout } from "../lib/layout";
+import { withRiverCrossing, snapToRoads, offsetLane, ROAD_Y } from "../lib/layout";
+import { allFlows } from "../lib/city";
 import { useCity, followTarget } from "../store/useCity";
 import { ENV } from "./env";
 import { VEHICLE_FAST, VEHICLE_MED, VEHICLE_SLOW, VEHICLE_HERO, pick } from "./assets";
 import { TollGate } from "./Toll";
+import type { Verb } from "./missionTypes";
 
-const SPEED = { fast: 0.1, medium: 0.045, slow: 0.018 };
+/** world-units per SECOND — divided by each lane's real length in useFrame,
+ *  so a car crosses any lane in (laneLength / speed) seconds regardless of
+ *  how the curve is parameterized. medium ≈ 5.5 u/s ⇒ ~50 s over the login
+ *  avenue instead of the old racetrack. */
+const SPEED = { fast: 9, medium: 5.5, slow: 3 };
 const LAT_COLOR = { fast: "#22c55e", medium: "#eab308", slow: "#ef4444" };
 
 /**
@@ -33,14 +40,25 @@ function makeCurve(L: CityLayout, name: string, ids: string[]): THREE.CatmullRom
       0.08,
     );
   }
-  console.warn(`[Traffic] no street lane for "${name}" — falling back to building centers`);
-  const pts = ids.filter(Boolean).map((id) => {
+  // derived flows have no hand-authored lane — route them along the REAL
+  // road network (Dijkstra over streets + bridge), not straight over lawns
+  console.info(`[Traffic] no street lane for "${name}" — routing over the road graph`);
+  const centers = ids.filter(Boolean).map((id) => {
     const b = L.byId.get(id);
     if (!b) console.warn(`[Traffic] unknown flow id "${id}" — skipped`);
     return b;
-  }).filter(Boolean).map((b) => new THREE.Vector3((b as any).pos[0], 0.05, (b as any).pos[2]));
-  if (pts.length < 2) return null;
-  return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.15);
+  }).filter(Boolean).map((b) => [(b as any).pos[0], (b as any).pos[2]] as [number, number]);
+  if (centers.length < 2) return null;
+  const onRoads = snapToRoads(L, centers);
+  let wps: [number, number, number][] = (onRoads ?? centers).map(([x, z]) => [x, ROAD_Y, z]);
+  wps = withRiverCrossing(wps); // bridge legs (also fixes the virtual span edge)
+  wps = offsetLane(wps, 0.75);  // right-hand traffic
+  return new THREE.CatmullRomCurve3(
+    wps.map(([x, y, z]) => new THREE.Vector3(x, y + 0.06, z)),
+    false,
+    "catmullrom",
+    0.15,
+  );
 }
 
 function GltfCar({ url, color }: { url: string; color?: string }) {
@@ -79,22 +97,32 @@ function Headlights({ flip = false }: { flip?: boolean }) {
 
 function Car({ curve, offset, latencyKey, hero, stuck, color }: any) {
   const ref = useRef<THREE.Group>(null!);
-  const t = useRef(offset);
   const cur = useCity((s) => s.latency);
-  const key = latencyKey ?? cur;
+  // latency only restyles the beacon + model; ambient pace stays stately
+  // (clamped to ≤1.5× medium) so one HUD toggle can't turn the city into a
+  // racetrack. An explicit latencyKey still sets that specific car's speed.
+  const key: keyof typeof SPEED = latencyKey ?? "medium";
+  const laneLen = useMemo(() => curve.getLength(), [curve]);
+  // stagger start offsets by lane length so gaps look natural on any curve
+  const t = useRef(((offset * laneLen) / 40) % 1);
   const url = useMemo(
-    () => (hero ? VEHICLE_HERO : key === "fast" ? pick(VEHICLE_FAST, offset * 100) : key === "medium" ? pick(VEHICLE_MED, offset * 100) : pick(VEHICLE_SLOW, offset * 100)),
-    [key, offset, hero],
+    () => (hero ? VEHICLE_HERO : cur === "fast" ? pick(VEHICLE_FAST, offset * 100) : cur === "slow" ? pick(VEHICLE_SLOW, offset * 100) : pick(VEHICLE_MED, offset * 100)),
+    [cur, offset, hero],
   );
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05); // clamp tab-switch/GC spikes → no teleporting actors
-    if (!stuck) t.current = (t.current + dt * SPEED[cur]) % 1;
+    if (!stuck) {
+      const spd = Math.min(SPEED[key], SPEED.medium * 1.5);
+      // while a mission is running the courier is the star — ambient traffic crawls
+      const missionActive = useCity.getState().mission != null;
+      const factor = missionActive ? 0.35 : 1;
+      t.current = (t.current + (dt * spd * factor) / laneLen) % 1;
+    }
     const u = stuck ? 0.55 : t.current;
     const p = curve.getPointAt(u), tan = curve.getTangentAt(u);
-    // deck top sits at y=1.5; lane waypoints already carry BRIDGE_Y over water.
-    // add only a small clearance bump so wheels never clip the deck slab.
-    const lift = (1 - THREE.MathUtils.smoothstep(Math.abs(p.x), 4.8, 7)) * 0.35;
-    ref.current.position.set(p.x, p.y + lift, p.z);
+    // lane waypoints already carry the bridge deck height (BRIDGE_Y) — no
+    // extra lift, or cars hover over the deck and "drop" off it
+    ref.current.position.set(p.x, p.y, p.z);
     ref.current.lookAt(p.clone().add(tan));
     // nose-at-−Z models would otherwise drive in reverse — spin them round
     if (REVERSE_MODELS.has(url)) ref.current.rotateY(Math.PI);
@@ -115,17 +143,6 @@ function Car({ curve, offset, latencyKey, hero, stuck, color }: any) {
 // door, cruises the flow lane SLOWLY, decelerates into every gateway, dwells
 // under a floating card explaining exactly what happens at that hop, then
 // reports 200 OK at the destination and dematerialises.
-
-type Verb = "dispatch" | "gate" | "arrive" | "work" | "verify" | "query" | "done";
-const VERB_COLOR: Record<Verb, string> = {
-  dispatch: "#0891b2",
-  gate: "#d97706",
-  arrive: "#ea580c",
-  work: "#db2777",
-  verify: "#7c3aed",
-  query: "#059669",
-  done: "#16a34a",
-};
 
 interface HopSpec {
   /** stop beside this building (u computed from its layout position) */
@@ -169,9 +186,58 @@ const MISSION_SPECS: Record<string, HopSpec[]> = {
 
 interface Hop extends HopSpec { u: number }
 
-function stopsFor(curve: THREE.CatmullRomCurve3, L: CityLayout, flow: string): Hop[] {
-  const spec = MISSION_SPECS[flow];
-  if (!spec) return [];
+/** verb for a hop, derived from the building's kind */
+const KIND_VERB: Record<string, Verb> = {
+  route: "arrive",
+  controller: "work",
+  service: "verify",
+  model: "query",
+  api: "gate",
+  middleware: "gate",
+  page: "dispatch",
+  component: "dispatch",
+  context: "dispatch",
+};
+
+/** Auto-flows (derived from a repo's graph) get synthesized hops: dispatch →
+    one hop per building in the chain → 200 OK. Hand-authored flows keep their
+    curated MISSION_SPECS. */
+function autoSpec(chain: string[], L: CityLayout): HopSpec[] {
+  const hops: HopSpec[] = [
+    {
+      landmark: "start",
+      title: "Client · dispatch",
+      verb: "dispatch",
+      detail: ["Request leaves the client —", "follow the courier through the", "derived call chain to the response."],
+    },
+  ];
+  for (const id of chain) {
+    const b = L.byId.get(id);
+    if (!b) continue;
+    const fn = b.functions[0]?.name;
+    hops.push({
+      buildingId: id,
+      title: b.name,
+      verb: KIND_VERB[b.kind] ?? "work",
+      detail: [
+        `${b.districtName} district · ${b.kind}`,
+        `${b.loc} LOC · health: ${b.health}`,
+        fn ? `entry fn: ${fn}()` : "delegates to the next hop",
+      ],
+    });
+  }
+  hops.push({
+    landmark: "end",
+    title: "200 OK · response returned",
+    verb: "done",
+    detail: ["The response retraces the chain", "back to the caller. Flow complete."],
+  });
+  return hops;
+}
+
+function stopsFor(curve: THREE.CatmullRomCurve3, L: CityLayout, flow: string, chain: string[]): Hop[] {
+  const spec = MISSION_SPECS[flow] ?? autoSpec(chain, L);
+  if (spec.length === 0) return [];
   const N = 480;
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i <= N; i++) pts.push(curve.getPointAt(i / N));
@@ -203,39 +269,12 @@ function stopsFor(curve: THREE.CatmullRomCurve3, L: CityLayout, flow: string): H
   return hops;
 }
 
-function MissionCard({ hop, idx, total }: { hop: Hop; idx: number; total: number }) {
-  return (
-    <div className="mc-wrap pointer-events-none w-64 select-none">
-      <style>{`@keyframes mcIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.mc-wrap{animation:mcIn .28s ease-out}`}</style>
-      <div className="rounded-none border-[1.5px] border-black-ink bg-paper/95 shadow-[4px_4px_0_rgba(20,20,20,.45)]">
-        <div className="flex items-center gap-1.5 border-b-[1.5px] border-black-ink px-2 py-1" style={{ background: VERB_COLOR[hop.verb] }}>
-          <span className="font-mono text-[9px] font-black uppercase tracking-wider text-white">{hop.verb}</span>
-          <span className="ml-auto font-mono text-[9px] text-white/85">step {idx + 1}/{total}</span>
-        </div>
-        <div className="px-2 py-1.5">
-          <div className="font-mono text-[11px] font-bold text-black-ink">{hop.title}</div>
-          {hop.detail.map((line, i) => (
-            <div key={i} className="font-mono text-[9.5px] leading-snug text-black-ink/75">{line}</div>
-          ))}
-          <div className="mt-1.5 flex gap-1">
-            {Array.from({ length: total }, (_, i) => (
-              <span key={i} className="h-1 flex-1" style={{ background: i <= idx ? VERB_COLOR[hop.verb] : "rgba(20,20,20,.15)" }} />
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const MISSION_CRUISE = 0.03;   // u/sec — a stately roll, ~½ lap per minute
 const MISSION_DWELL = 3.4;     // sec paused under each gateway card (was 2.6)
-// ?fm=1 → verification fast-forward (10× cruise, snap dwells)
-const FM = typeof location !== "undefined" && new URLSearchParams(location.search).has("fm");
-const M_CRUISE = FM ? 0.3 : MISSION_CRUISE;
-const M_DWELL = FM ? 0.25 : MISSION_DWELL;
+// runtime fast-forward (2× button in the mission strip, or ?fm=1 on load)
+// → verification speed: ~10× cruise, snap dwells
 
-function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullRomCurve3; L: CityLayout; flow?: string; onEnd: () => void }) {
+function MissionCar({ curve, L, flow = "login", chain, onEnd }: { curve: THREE.CatmullRomCurve3; L: CityLayout; flow?: string; chain: string[]; onEnd: () => void }) {
   const ref = useRef<THREE.Group>(null!);
   const u = useRef(0);
   const hopIdx = useRef(0);
@@ -243,13 +282,15 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
   const dwellT = useRef(0);
   const [, force] = useState(0); // re-render when the active hop changes
   const activeHop = useRef(-1);
-  const hops = useMemo(() => stopsFor(curve, L, flow), [curve, L, flow]);
+  const hops = useMemo(() => stopsFor(curve, L, flow, chain), [curve, L, flow, chain]);
   // cinematic camera state — a low chase cam while driving, a slow arc around
   // the gateway while dwelling. Angles are absolute world-space so the arc is
   // stable no matter which direction the car approached from.
   const camA = useRef(0);
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
+  const hudAcc = useRef(0);
+  const activeHopDirty = useRef(true);
 
   useEffect(() => () => {
     followTarget.active = false;
@@ -260,6 +301,9 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
     if (!ref.current || hops.length === 0) return;
+    const ff = useCity.getState().fastForward;
+    const M_CRUISE = ff ? 0.3 : MISSION_CRUISE;
+    const M_DWELL = ff ? 0.25 : MISSION_DWELL;
     const hop = hops[Math.min(hopIdx.current, hops.length - 1)];
 
     if (phase.current === "drive") {
@@ -282,13 +326,41 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
 
     if (activeHop.current !== Math.min(hopIdx.current, hops.length - 1)) {
       activeHop.current = Math.min(hopIdx.current, hops.length - 1);
+      activeHopDirty.current = true;
       force((n) => n + 1);
+    }
+
+    // feed the bottom-center mission strip (DOM overlay in the HUD).
+    // Progress patches are throttled to ~4 Hz so the strip never re-renders
+    // per frame; hop changes push through immediately via idxNow.
+    const idxNow = Math.min(hopIdx.current, hops.length - 1);
+    const curHop = hops[idxNow];
+    hudAcc.current += dt;
+    if (hudAcc.current > 0.25 || activeHopDirty.current) {
+      hudAcc.current = 0;
+      activeHopDirty.current = false;
+      const progress = +u.current.toFixed(3);
+      useCity.setState((s) => {
+        const prev = s.missionHud;
+        if (prev && prev.idx === idxNow && Math.abs(prev.progress - progress) < 0.005) return s;
+        return {
+          ...s,
+          missionHud: {
+            flow,
+            idx: idxNow,
+            total: hops.length,
+            title: curHop.title,
+            verb: curHop.verb,
+            detail: curHop.detail,
+            progress,
+          },
+        };
+      });
     }
 
     const uu = THREE.MathUtils.clamp(u.current, 0, 0.999);
     const p = curve.getPointAt(uu), tan = curve.getTangentAt(uu);
-    const lift = (1 - THREE.MathUtils.smoothstep(Math.abs(p.x), 4.8, 7)) * 0.35;
-    ref.current.position.set(p.x, p.y + lift, p.z);
+    ref.current.position.set(p.x, p.y, p.z);
     ref.current.lookAt(p.clone().add(tan));
     if (REVERSE_MODELS.has(VEHICLE_HERO)) ref.current.rotateY(Math.PI);
 
@@ -311,11 +383,11 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
   });
 
   if (hops.length === 0) return null;
-  const idx = Math.min(hopIdx.current, hops.length - 1);
-  const hop = hops[idx];
-  const near = phase.current !== "done-hold" ? Math.abs(hop.u - u.current) < 0.07 : false;
-  const showCard = phase.current === "dwell" || phase.current === "done-hold" || near;
 
+  // The explainer cards used to float above the car in 3D (distanceFactor=52)
+  // where they collided with district labels and right-rail panels. They now
+  // live in the HUD's bottom-center MissionStrip; the car keeps only its
+  // beacon so eyes can track it while the strip explains the hop.
   return (
     <group ref={ref}>
       <GltfCar url={VEHICLE_HERO} color="#e11d48" />
@@ -325,11 +397,6 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
         <sphereGeometry args={[0.09, 10, 10]} />
         <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={1.4 + ENV.night * 3} />
       </mesh>
-      {showCard && (
-        <Html center distanceFactor={52} position={[0, 3.4, 0]} zIndexRange={[40, 0]}>
-          <MissionCard hop={hop} idx={idx} total={hops.length} />
-        </Html>
-      )}
     </group>
   );
 }
@@ -337,14 +404,16 @@ function MissionCar({ curve, L, flow = "login", onEnd }: { curve: THREE.CatmullR
 /** emerald delivery truck: slow loop on the query edge (services → database platform) */
 function Truck({ curve, offset }: { curve: THREE.CatmullRomCurve3; offset: number }) {
   const ref = useRef<THREE.Group>(null!);
-  const t = useRef(offset);
+  const laneLen = useMemo(() => curve.getLength(), [curve]);
+  const t = useRef(((offset * laneLen) / 40) % 1);
   const url = useMemo(() => pick(VEHICLE_SLOW, offset * 777), [offset]);
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05); // clamp tab-switch/GC spikes → no teleporting actors
-    t.current = (t.current + dt * SPEED.slow * 0.55) % 1;
+    // while a mission is running the courier is the star — ambient traffic crawls
+    const factor = useCity.getState().mission != null ? 0.35 : 1;
+    t.current = (t.current + (dt * SPEED.slow * 0.7 * factor) / laneLen) % 1;
     const p = curve.getPointAt(t.current), tan = curve.getTangentAt(t.current);
-    const lift = (1 - THREE.MathUtils.smoothstep(Math.abs(p.x), 4.8, 7)) * 0.35;
-    ref.current.position.set(p.x, p.y + lift, p.z);
+    ref.current.position.set(p.x, p.y, p.z);
     ref.current.lookAt(p.clone().add(tan));
   });
   return (
@@ -368,13 +437,16 @@ export function Traffic({ L }: { L: CityLayout }) {
   const endMission = useCity((s) => s.endMission);
   const missionKey = `${mission?.flow ?? "none"}#${mission?.startedAt ?? 0}`;
 
-  // curves built reactively from the active city's flows
-  const flows = useCity((s) => s.city.flows);
+  // curves built reactively from the active city's flows. Hand-authored
+  // flows (demo lanes) win; everything else is derived from the repo graph
+  // so ANY endpoint a developer's app exposes can be run.
+  const city = useCity((s) => s.city);
+  const merged = useMemo(() => allFlows(city), [city]);
   const curves = useMemo(() => {
     const out: Record<string, THREE.CatmullRomCurve3 | null> = {};
-    for (const [name, ids] of Object.entries(flows ?? {})) out[name] = makeCurve(L, name, ids as string[]);
+    for (const [name, ids] of Object.entries(merged)) out[name] = makeCurve(L, name, ids as string[]);
     return out;
-  }, [flows, L]);
+  }, [merged, L]);
 
   // followTarget ghost fix: deactivate when this layer unmounts
   useEffect(() => () => { followTarget.active = false; }, []);
@@ -398,6 +470,7 @@ export function Traffic({ L }: { L: CityLayout }) {
           curve={curves[mission.flow]!}
           L={L}
           flow={mission.flow}
+          chain={(merged[mission.flow] ?? []) as string[]}
           onEnd={() => endMission()}
         />
       )}

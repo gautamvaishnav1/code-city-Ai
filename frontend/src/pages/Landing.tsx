@@ -237,7 +237,6 @@ function AtlasSection() {
   }, []);
   const pick = (i: number) => {
     setTab(i);
-    manualLock.current = Date.now() + 15000;
   };
   return (
     <section id="atlas" className="sheet scroll-mt-8 py-20 md:py-28">
@@ -273,7 +272,11 @@ function AtlasSection() {
                       <button
                         key={t}
                         type="button"
-                        onClick={() => pick(i)}
+                        onClick={() => {
+                          pick(i);
+                          // 15 s manual lock so narration doesn't override the user
+                          manualLock.current = Date.now() + 15000;
+                        }}
                         aria-pressed={tab === i}
                         style={{ position: "relative", zIndex: 5 }}
                         className={`caption-caps flex-1 border-r border-black-ink/25 px-1 py-2 text-center last:border-r-0 transition-colors ${tab === i ? "bg-black-ink text-paper font-bold" : "text-black-ink/55 hover:bg-black-ink/10"}`}

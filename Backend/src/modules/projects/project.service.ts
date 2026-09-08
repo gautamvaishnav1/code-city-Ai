@@ -3,17 +3,16 @@ import type { ProjectDocument } from "./project.model";
 import { ProjectModel } from "./project.model";
 import type { CreateProjectInput } from "./project.validation";
 
+/** Idempotent: submitting the same repoUrl twice returns the existing project. */
 export async function createProject(
   userId: string,
   input: CreateProjectInput
-): Promise<ProjectDocument> {
-  const duplicate = await ProjectModel.findOne({ owner: userId, repoUrl: input.repoUrl })
-    .lean()
-    .catch(() => null);
-  if (duplicate) {
-    throw ApiError.conflict("A project for this repository URL already exists");
-  }
-  return ProjectModel.create({ ...input, owner: userId });
+): Promise<{ project: ProjectDocument; reused: boolean }> {
+  const existing = await ProjectModel.findOne({ owner: userId, repoUrl: input.repoUrl }).catch(
+    () => null
+  );
+  if (existing) return { project: existing, reused: true };
+  return { project: await ProjectModel.create({ ...input, owner: userId }), reused: false };
 }
 
 export async function listProjects(userId: string): Promise<unknown[]> {

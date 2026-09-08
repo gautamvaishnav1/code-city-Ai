@@ -35,15 +35,7 @@ function AuthInner({ onClose, onSuccess }: { onClose: () => void; onSuccess: () 
   const [cooldown, setCooldown] = useState(0);
   const [oauthBusy, setOauthBusy] = useState<"google" | "github" | null>(null);
   const otpRefs = useRef<Array<HTMLInputElement | null>>([]);
-
-  // Esc closes; focus lands on the first control
   const frame = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", h);
-    frame.current?.querySelector<HTMLElement>("input,button")?.focus();
-    return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -153,11 +145,11 @@ function AuthInner({ onClose, onSuccess }: { onClose: () => void; onSuccess: () 
   /* ── OTP step ── */
   if (step === "otp") {
     return (
-      <Frame onClose={onClose} innerRef={frame}>
+      <Frame onClose={onClose} innerRef={frame} titleId="cc-otp-title">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="caption-caps font-bold text-signal">STEP 2 OF 2 — POSTMARK</p>
-            <h2 className="display-caps mt-2 text-3xl">Check your mail</h2>
+            <h2 id="cc-otp-title" className="display-caps mt-2 text-3xl">Check your mail</h2>
             <p className="mt-2 text-[13px] leading-5 text-black-ink/70">
               A 6-digit code was sent to <b className="tabular-nums">{email}</b>. It expires in 10 minutes.
             </p>
@@ -212,11 +204,11 @@ function AuthInner({ onClose, onSuccess }: { onClose: () => void; onSuccess: () 
 
   /* ── sign in / sign up ── */
   return (
-    <Frame onClose={onClose} innerRef={frame}>
+    <Frame onClose={onClose} innerRef={frame} titleId="cc-auth-title">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="caption-caps font-bold">IDENTITY CARD — N° 04</p>
-          <h2 className="display-caps mt-2 text-3xl md:text-4xl">{mode === "signin" ? "Welcome back" : "Print your pass"}</h2>
+          <h2 id="cc-auth-title" className="display-caps mt-2 text-3xl md:text-4xl">{mode === "signin" ? "Welcome back" : "Print your pass"}</h2>
           <p className="mt-2 text-[13px] leading-5 text-black-ink/70">
             {mode === "signin" ? "Sign in to enter your city." : "Free forever for public repositories."}
           </p>
@@ -293,10 +285,61 @@ function AuthInner({ onClose, onSuccess }: { onClose: () => void; onSuccess: () 
 
 /* ── shared pieces ───────────────────────────────────────────────── */
 
-function Frame({ children, onClose, innerRef }: { children: ReactNode; onClose: () => void; innerRef: React.RefObject<HTMLDivElement | null> }) {
+function Frame({
+  children,
+  onClose,
+  innerRef,
+  titleId,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  innerRef: React.RefObject<HTMLDivElement | null>;
+  titleId: string;
+}) {
+  // Esc closes · focus lands on the first control · Tab is TRAPPED inside
+  // the card (aria-modal must mean it)
+  useEffect(() => {
+    const el = innerRef.current;
+    el?.querySelector<HTMLElement>("input,button")?.focus();
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !el) return;
+      const focusables = Array.from(
+        el.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((n) => n.offsetParent !== null);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [innerRef, onClose]);
+
   return (
-    <div className="fixed inset-0 z-[90] grid place-items-center overflow-y-auto bg-black-ink/60 p-4 backdrop-blur-[2px]" onClick={onClose} role="dialog" aria-modal="true">
-      <div ref={innerRef} onClick={(e) => e.stopPropagation()} className="auth-card relative my-auto w-full max-w-md border-[1.5px] border-black-ink bg-paper p-6 shadow-[8px_8px_0_rgba(20,20,20,0.35)] md:p-7">
+    <div
+      className="fixed inset-0 z-[90] grid place-items-center overflow-y-auto bg-black-ink/60 p-4 backdrop-blur-[2px]"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
+      <div
+        ref={innerRef}
+        onClick={(e) => e.stopPropagation()}
+        className="auth-card relative my-auto w-full max-w-md border-[1.5px] border-black-ink bg-paper p-6 shadow-[8px_8px_0_rgba(20,20,20,0.35)] md:p-7"
+      >
         <span aria-hidden className="misreg absolute -right-2 -top-2 h-6 w-6 rounded-full bg-signal" />
         {children}
       </div>

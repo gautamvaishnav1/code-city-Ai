@@ -40,3 +40,18 @@ export const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 30
 });
+
+/** Refresh-token exchange — small per-IP budget; abuse = token stuffing. */
+export const refreshTokenLimiter = rateLimit({
+  ...base,
+  windowMs: 15 * 60 * 1000,
+  limit: 60
+});
+
+/** Layered on top of the global limiter for expensive read endpoints
+ *  (full analysis results, architecture graphs). */
+export const readLimiter = rateLimit({
+  ...base,
+  windowMs: 10 * 60 * 1000,
+  limit: 100
+});

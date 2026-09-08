@@ -16,7 +16,7 @@ import { Lightning } from "./Lightning";
 import { Wet } from "./Wet";
 import { CameraRig } from "./CameraRig";
 import { ShowcaseWorld, ShowcaseOrbit } from "./Showcase";
-import { FloatingNotifs } from "../ui/HUD";
+import { FloatingNotifs } from "../ui/panels/FloatingNotifs";
 import { Connections } from "./Connections";
 import { HDRI_DAY, HDRI_NIGHT, preloadAll } from "./assets";
 

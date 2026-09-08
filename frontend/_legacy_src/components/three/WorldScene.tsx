@@ -6,8 +6,7 @@ import { useEffect, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Environment, BakeShadows } from '@react-three/drei';
 import * as THREE from 'three';
-import { useAppDispatch, useAppSelector } from '../../store';
-import { setSelectedNode } from '../../store/citySlice';
+
 import { ISLAND_SECTORS } from '../../data/mockRepoData';
 
 import { OceanPlane } from './OceanPlane';

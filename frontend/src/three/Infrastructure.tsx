@@ -3,6 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { Instances, Instance, Line, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { CityLayout } from "../lib/layout";
+import { BRIDGE, roadClearance } from "../lib/layout";
 import { useCity } from "../store/useCity";
 import { ENV } from "./env";
 import { grassTexture, asphaltTexture, groundTextures } from "./textures";
@@ -39,51 +40,104 @@ export function Ground() {
 
 export function Roads({ L }: { L: CityLayout }) {
   const hw = useMemo(() => asphaltTexture(true), []), st = useMemo(() => asphaltTexture(false), []);
-  const dashes = useMemo(() => L.dashes.map(({ p, rot }) => ({ p, rot })), [L]);
+  const arterials = useMemo(() => L.dashes.filter((d) => d.size === "arterial"), [L]);
+  const streets = useMemo(() => L.dashes.filter((d) => d.size === "street"), [L]);
+  // readability pass: asphalt sits well below the grass tone now, and every
+  // drivable surface (rings included) carries markings — no more gray-on-gray
+  const ASPHALT_STREET = "#1a1d24";
+  const ASPHALT_HWY = "#232830";
   return (
     <group>
       {L.roads.map((s, i) => { const p = seg(s.a, s.b); const t = (s.kind === "highway" ? hw : st).clone(); t.repeat.set(p.len / 8, s.kind === "highway" ? 1.6 : 0.8); t.needsUpdate = true; return (
         <mesh key={i} rotation={[-Math.PI / 2, 0, Math.atan2(-(s.b[1] - s.a[1]), s.b[0] - s.a[0])]} position={[p.mid[0], s.kind === "highway" ? 0.09 : 0.08, p.mid[1]]} receiveShadow>
-          <planeGeometry args={[p.len, s.w]} /><meshStandardMaterial map={t} color="#2b3038" roughness={0.95} />
+          <planeGeometry args={[p.len, s.w]} /><meshStandardMaterial map={t} color={s.kind === "highway" ? ASPHALT_HWY : ASPHALT_STREET} roughness={0.95} />
         </mesh> ); })}
-      {/* lane dashes (layout generates them; now they're actually rendered) */}
+      {/* chunky centre-line on the avenues/highways */}
       <Instances limit={400} frustumCulled={false}>
         <planeGeometry args={[1.6, 0.18]} />
         <meshStandardMaterial color="#e8d9a0" emissive="#f59e0b" emissiveIntensity={ENV.night * 0.8} transparent opacity={0.85} />
-        {dashes.map((d, i) => <Instance key={i} position={[d.p[0], 0.105, d.p[1]]} rotation={[0, d.rot, 0]} />)}
+        {arterials.map((d, i) => <Instance key={i} position={[d.p[0], 0.105, d.p[1]]} rotation={[0, d.rot, 0]} />)}
       </Instances>
+      {/* thinner, dimmer markings on district ring roads */}
+      <Instances limit={600} frustumCulled={false}>
+        <planeGeometry args={[1.25, 0.11]} />
+        <meshStandardMaterial color="#cdbf95" emissive="#f59e0b" emissiveIntensity={ENV.night * 0.4} transparent opacity={0.5} />
+        {streets.map((d, i) => <Instance key={i} position={[d.p[0], 0.095, d.p[1]]} rotation={[0, d.rot, 0]} />)}
+      </Instances>
+      {/* zebra crosswalks at every gate stub */}
+      <Instances limit={300} frustumCulled={false}>
+        <planeGeometry args={[2.2, 0.34]} />
+        <meshStandardMaterial color="#dfe4ea" roughness={0.9} transparent opacity={0.75} />
+        {L.crossings.map((c, i) => <Instance key={i} position={[c.p[0], 0.1, c.p[1]]} rotation={[0, c.rot, 0]} />)}
+      </Instances>
+      {/* curbs — a 0.15 lip around each district ring road sells "real street" */}
+      {L.districts.map((d, di) => {
+        if (d.stack === "database") return null;
+        const R = d.ringR + 1.45, D = d.ringD + 1.45;
+        return (
+          <group key={`curb${di}`} position={[d.center[0], 0, d.center[1]]}>
+            {[[-D], [D]].map(([z], i) => (
+              <mesh key={`h${i}`} position={[0, 0.07, z as number]} receiveShadow>
+                <boxGeometry args={[R * 2 + 0.35, 0.14, 0.35]} />
+                <meshStandardMaterial color="#3a4150" roughness={0.85} />
+              </mesh>
+            ))}
+            {[[-R], [R]].map(([x], i) => (
+              <mesh key={`v${i}`} position={[x as number, 0.07, 0]} receiveShadow>
+                <boxGeometry args={[0.35, 0.14, D * 2 + 0.35]} />
+                <meshStandardMaterial color="#3a4150" roughness={0.85} />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
       {/* junction corner patches — hide the notch where avenue meets trunk */}
       {[[-42, -8], [42, -8]].map(([jx, jz], i) => (
         <mesh key={`j${i}`} rotation-x={-Math.PI / 2} position={[jx, 0.085, jz]} receiveShadow>
           <planeGeometry args={[5, 5]} />
-          <meshStandardMaterial map={st.clone()} color="#2b3038" roughness={0.95} />
+          <meshStandardMaterial map={st.clone()} color={ASPHALT_HWY} roughness={0.95} />
         </mesh>
       ))}
-      {L.bridges.map((z, i) => (
+      {L.bridges.map((z, i) => {
+        // Slab geometry is derived from BRIDGE (lib/layout) — the same numbers
+        // the vehicle lanes ride, so wheels and asphalt always agree.
+        const rampAng = Math.atan2(BRIDGE.deckTop - BRIDGE.approachY, BRIDGE.rampRun);
+        const rampCx = BRIDGE.halfSpan + BRIDGE.rampRun / 2;                       // 7.9
+        const rampCy = (BRIDGE.deckTop + BRIDGE.approachY) / 2 - 0.13;             // slab center
+        return (
         <group key={i} position={[0, 0, z]}>
-          {/* approach ramps: road-y → deck-y so cars/peds transition smoothly */}
-          <mesh position={[-7.75, 0.55, 0]} rotation-z={-0.165} castShadow>
-            <boxGeometry args={[3.9, 0.25, 6.4]} />
+          {/* approach ramps: road-y → deck-y, tilted TOWARD the deck */}
+          <mesh position={[-rampCx, rampCy, 0]} rotation-z={rampAng} castShadow>
+            <boxGeometry args={[BRIDGE.rampRun + 0.1, 0.26, 6.4]} />
             <meshStandardMaterial map={hw} />
           </mesh>
-          <mesh position={[7.75, 0.55, 0]} rotation-z={0.165} castShadow>
-            <boxGeometry args={[3.9, 0.25, 6.4]} />
+          <mesh position={[rampCx, rampCy, 0]} rotation-z={-rampAng} castShadow>
+            <boxGeometry args={[BRIDGE.rampRun + 0.1, 0.26, 6.4]} />
             <meshStandardMaterial map={hw} />
           </mesh>
-          {/* main deck — TOP surface exactly at y=1.5 where lanes ride */}
-          <mesh position={[0, 1.3, 0]} castShadow receiveShadow>
-            <boxGeometry args={[12, 0.4, 6.4]} />
+          {/* main deck — TOP surface exactly at BRIDGE.deckTop where lanes ride */}
+          <mesh position={[0, BRIDGE.deckTop - 0.25, 0]} castShadow receiveShadow>
+            <boxGeometry args={[BRIDGE.halfSpan * 2 + 0.2, 0.5, 6.4]} />
             <meshStandardMaterial map={hw} />
           </mesh>
-          {/* piers */}
-          <mesh position={[-3.2, 0.45, 0]}><cylinderGeometry args={[0.42, 0.5, 1.1, 10]} /><meshStandardMaterial color="#334155" /></mesh>
-          <mesh position={[3.2, 0.45, 0]}><cylinderGeometry args={[0.42, 0.5, 1.1, 10]} /><meshStandardMaterial color="#334155" /></mesh>
+          {/* piers — from the riverbed up to the deck underside */}
+          {[-3.2, 3.2].map((px, pi) => (
+            <mesh key={pi} position={[px, -0.2, 0]}>
+              <cylinderGeometry args={[0.42, 0.5, 1.1, 10]} />
+              <meshStandardMaterial color="#334155" />
+            </mesh>
+          ))}
           {/* railings + nav lights */}
-          <mesh position={[0, 1.72, 3.05]}><boxGeometry args={[12.4, 0.45, 0.14]} /><meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={1.4} /></mesh>
-          <mesh position={[0, 1.72, -3.05]}><boxGeometry args={[12.4, 0.45, 0.14]} /><meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={1.4} /></mesh>
-          <mesh position={[-5.6, 2.6, 0]}><sphereGeometry args={[0.16, 8, 8]} /><meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={2} /></mesh>
-          <mesh position={[5.6, 2.6, 0]}><sphereGeometry args={[0.16, 8, 8]} /><meshStandardMaterial color="#22c55e" emissive="#22c55e" emissiveIntensity={2} /></mesh>
-        </group>))}
+          {[-3.05, 3.05].map((rz, ri) => (
+            <mesh key={ri} position={[0, BRIDGE.deckTop + 0.2, rz]}>
+              <boxGeometry args={[BRIDGE.halfSpan * 2 + 0.6, 0.32, 0.12]} />
+              <meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={1.4} />
+            </mesh>
+          ))}
+          <mesh position={[-5.8, BRIDGE.deckTop + 0.62, 0]}><sphereGeometry args={[0.16, 8, 8]} /><meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={2} /></mesh>
+          <mesh position={[5.8, BRIDGE.deckTop + 0.62, 0]}><sphereGeometry args={[0.16, 8, 8]} /><meshStandardMaterial color="#22c55e" emissive="#22c55e" emissiveIntensity={2} /></mesh>
+        </group>);
+      })}
     </group>
   );
 }
@@ -138,16 +192,25 @@ export function Decor({ L }: { L: CityLayout }) {
   const lamp = useRef<THREE.MeshStandardMaterial>(null!);
   useFrame(() => { if (lamp.current) lamp.current.emissiveIntensity = 0.2 + ENV.night * 1.0; });
   const props = useMemo(() => {
-    // dress the database platform + district corners with street furniture
+    // dress the district corners with street furniture. Positions are relative
+    // to each district's own RING (which grows with content) and every spot is
+    // rejected if it lands on any drivable surface — furniture beside roads,
+    // never on them.
     const out: { url: string; p: [number, number]; rot: number }[] = [];
+    const push = (url: string, x: number, z: number, rot: number) => {
+      if (roadClearance(L, x, z) < 0.9) return; // would stand on asphalt
+      out.push({ url, p: [x, z], rot });
+    };
     L.districts.forEach((d, di) => {
       if (d.stack === "database") return;
-      out.push({ url: PROP.bench, p: [d.center[0] - 13.5, d.center[1] + DRESS(di, 0)], rot: Math.PI / 2 });
-      out.push({ url: PROP.hydrant, p: [d.center[0] + 13.5, d.center[1] - DRESS(di, 1)], rot: 0 });
-      out.push({ url: PROP.trashBin, p: [d.center[0] - 12.6, d.center[1] - DRESS(di, 2)], rot: 0 });
-      out.push({ url: PROP.mailbox, p: [d.center[0] + 12.4, d.center[1] + DRESS(di, 3)], rot: -Math.PI / 3 });
-      if (di % 2 === 0) out.push({ url: PROP.phoneBooth, p: [d.center[0], d.center[1] + 11.2], rot: 0 });
-      else out.push({ url: PROP.kiosk, p: [d.center[0], d.center[1] - 11.2], rot: Math.PI });
+      // sidewalk cluster on the WEST lawn, strictly outside ring + curb
+      const wx = d.center[0] - d.ringR;
+      push(PROP.bench, wx - 5.2, d.center[1] + DRESS(di, 0), Math.PI / 2);
+      push(PROP.hydrant, wx - 4.2, d.center[1] - DRESS(di, 1), 0);
+      push(PROP.trashBin, wx - 3.4, d.center[1] - DRESS(di, 2), 0);
+      push(PROP.mailbox, wx - 2.6, d.center[1] + DRESS(di, 3), -Math.PI / 3);
+      if (di % 2 === 0) push(PROP.phoneBooth, d.center[0], d.center[1] + d.ringD + 3.4, 0);
+      else push(PROP.kiosk, d.center[0], d.center[1] - d.ringD - 3.4, Math.PI);
     });
     // plaza on the database platform
     out.push({ url: PROP.fountain, p: [0, 61], rot: 0 });
@@ -156,22 +219,25 @@ export function Decor({ L }: { L: CityLayout }) {
     out.push({ url: PROP.planter, p: [-14, 58.5], rot: 0 });
     out.push({ url: PROP.planter, p: [14, 58.5], rot: 0 });
     out.push({ url: PROP.billboard, p: [-30, 30], rot: Math.PI / 4 });
-    out.push({ url: PROP.busStop, p: [-38.5, -26], rot: Math.PI / 2 });
-    out.push({ url: PROP.trafficLight, p: [38.5, -26], rot: -Math.PI / 2 });
-    out.push({ url: PROP.bollard, p: [-3, 55], rot: 0 });
-    out.push({ url: PROP.bollard, p: [3, 55], rot: 0 });
+    push(PROP.busStop, -46.8, -26, Math.PI / 2);
+    push(PROP.trafficLight, 46.8, -26, -Math.PI / 2);
+    push(PROP.bollard, -3, 55, 0);
+    push(PROP.bollard, 3, 55, 0);
     return out;
   }, [L]);
   const scatter = useMemo(() => {
-    // nature scatter around the map edges & between districts
+    // nature scatter around the map edges & between districts — never on roads
     const out: { kind: "tree" | "rock" | "bush"; x: number; z: number; s: number; seed: number }[] = [];
     for (let i = 0; i < 90; i++) {
       const ang = (i / 90) * Math.PI * 2 + 0.13;
       const r = 62 + ((i * 37) % 40);
-      out.push({ kind: i % 5 === 0 ? "rock" : i % 5 === 1 ? "bush" : "tree", x: Math.cos(ang) * r, z: Math.sin(ang) * r * 0.85, s: 0.8 + ((i * 17) % 10) / 10, seed: i * 0.618 });
+      const x = Math.cos(ang) * r;
+      const z = Math.sin(ang) * r * 0.85;
+      if (roadClearance(L, x, z) < 1.0) continue;
+      out.push({ kind: i % 5 === 0 ? "rock" : i % 5 === 1 ? "bush" : "tree", x, z, s: 0.8 + ((i * 17) % 10) / 10, seed: i * 0.618 });
     }
     return out;
-  }, []);
+  }, [L]);
   return (
     <group>
       {L.trees.map((t, i) => <GltfTree key={i} pos={t} seed={i * 0.173 + 0.41} />)}

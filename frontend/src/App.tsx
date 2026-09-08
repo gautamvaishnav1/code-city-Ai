@@ -7,7 +7,9 @@ const HUD = lazy(() =>
 );
 import { CommandPalette, type PaletteItem } from "./components/ui/CommandPalette";
 import { AuthModal } from "./components/AuthModal";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { completeOauthFromUrl, useAuth } from "./lib/auth";
+import { togglePalette, useUi } from "./store/useUi";
 import { CursorGlow, Noise } from "./components/ui/effects";
 
 function scrollToId(id: string) {
@@ -18,8 +20,12 @@ export default function App() {
   const [view, setView] = useState<"landing" | "app">(() =>
     location.hash === "#app" ? "app" : "landing",
   );
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
+  // overlay gates live in a tiny store so the city's global shortcut handler
+  // can stand down while the palette / auth modal is open
+  const paletteOpen = useUi((s) => s.paletteOpen);
+  const authOpen = useUi((s) => s.authOpen);
+  const closePalette = useCallback(() => useUi.setState({ paletteOpen: false }), []);
+  const openAuth = useCallback(() => useUi.setState({ authOpen: true }), []);
 
   // hash-based routing (no router dep needed)
   useEffect(() => {
@@ -32,12 +38,12 @@ export default function App() {
     // auth gate — first visit asks you to create an account
     if (!useAuth.getState().token) {
       sessionStorage.setItem("cc-auth-intent", "app");
-      setAuthOpen(true);
+      openAuth();
       return;
     }
     location.hash = "#app";
     setView("app");
-  }, []);
+  }, [openAuth]);
 
   // warm the 3D chunk on intent (hover/focus) and during idle — city opens instantly
   const preloadCity = useCallback(() => {
@@ -75,7 +81,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setPaletteOpen((o) => !o);
+        togglePalette();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -111,19 +117,23 @@ export default function App() {
       extras.push({ id: "whoami", label: `Signed in as ${user.name}`, hint: user.email, run: () => {} });
       extras.push({ id: "signout", label: "Sign out", run: signOut });
     } else {
-      extras.push({ id: "signin", label: "Sign in / Create account", run: () => setAuthOpen(true) });
+      extras.push({ id: "signin", label: "Sign in / Create account", run: openAuth });
     }
     return extras;
-  }, [view, user, signOut]);
+  }, [view, user, signOut, openAuth]);
 
   return (
     <>
       {view === "app" ? (
         <div className="relative h-screen w-screen overflow-hidden bg-bg0">
           <Suspense fallback={<div className="grid h-full place-items-center font-mono text-sm text-white/50">🏗 building the city…</div>}>
-            <CityScene />
+            <ErrorBoundary>
+              <CityScene />
+            </ErrorBoundary>
           </Suspense>
-          <HUD />
+          <ErrorBoundary>
+            <HUD />
+          </ErrorBoundary>
           <button
             onClick={home}
             className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 translate-y-[64px] rounded-full border border-white/10 bg-slate-900/70 px-3 py-1 font-mono text-[10px] text-slate-400 backdrop-blur transition-colors hover:text-cyan-300"
@@ -138,14 +148,14 @@ export default function App() {
       {view === "app" && <CursorGlow />}
       <CommandPalette
         open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
+        onClose={closePalette}
         items={[...paletteItems, ...appPaletteExtras]}
       />
       <AuthModal
         open={authOpen}
-        onClose={() => setAuthOpen(false)}
+        onClose={() => useUi.setState({ authOpen: false })}
         onSuccess={() => {
-          setAuthOpen(false);
+          useUi.setState({ authOpen: false });
           location.hash = "#app";
           setView("app");
         }}

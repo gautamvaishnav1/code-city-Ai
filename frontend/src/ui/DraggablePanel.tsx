@@ -10,7 +10,16 @@ function loadSaved(id: string): Saved | null {
     const raw = localStorage.getItem(key(id));
     if (!raw) return null;
     const s = JSON.parse(raw) as Saved;
-    return Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.w) && Number.isFinite(s.h) ? s : null;
+    const ok = Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.w) && Number.isFinite(s.h);
+    if (!ok) return null;
+    // clamp against the CURRENT viewport — a position saved on a 4K monitor
+    // must never strand the panel off-screen on a laptop
+    return {
+      w: s.w,
+      h: s.h,
+      x: clamp(s.x, 48 - s.w, window.innerWidth - 48),
+      y: clamp(s.y, 0, Math.max(0, window.innerHeight - 40)),
+    };
   } catch {
     return null;
   }
@@ -79,6 +88,19 @@ export function DraggablePanel({
     return () => window.removeEventListener("cc-panels-reset", onReset);
   }, [id]);
 
+  // keep free panels inside the viewport when the window shrinks
+  useEffect(() => {
+    if (!free) return;
+    const onResize = () =>
+      setBox((b) => ({
+        ...b,
+        x: clamp(b.x, 48 - b.w, window.innerWidth - 48),
+        y: clamp(b.y, 0, Math.max(0, window.innerHeight - 40)),
+      }));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [free]);
+
   const save = () => {
     const r = ref.current?.getBoundingClientRect();
     if (!r) return;
@@ -90,6 +112,8 @@ export function DraggablePanel({
     }
   };
 
+  /** 4px threshold — a plain click never flips a docked panel to free mode
+      (phantom "invisible grip" clicks were teleporting HUD blocks around) */
   const startDrag = (e: RPointerEvent) => {
     const t = e.target as HTMLElement;
     if (t.closest("button,a,input,textarea,select,label,[data-nodrag]")) return;
@@ -99,13 +123,19 @@ export function DraggablePanel({
     const r = el.getBoundingClientRect();
     const x0 = freeRef.current ? boxRef.current.x : r.left;
     const y0 = freeRef.current ? boxRef.current.y : r.top;
-    if (!freeRef.current) {
-      setBox({ x: r.left, y: r.top, w: r.width, h: r.height });
-      setFree(true);
-    }
     const px = e.clientX;
     const py = e.clientY;
+    let armed = freeRef.current; // already-free panels move immediately
+    let moved = false;
     const move = (ev: PointerEvent) => {
+      if (!armed) {
+        if (Math.hypot(ev.clientX - px, ev.clientY - py) < 4) return;
+        armed = true;
+        moved = true;
+        setBox({ x: r.left, y: r.top, w: r.width, h: r.height });
+        setFree(true);
+      }
+      moved = true;
       setBox((b) => ({
         ...b,
         x: clamp(x0 + ev.clientX - px, 48 - b.w, window.innerWidth - 48),
@@ -115,7 +145,7 @@ export function DraggablePanel({
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      save();
+      if (moved) save();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -166,7 +196,7 @@ export function DraggablePanel({
       onPointerDown={startDrag}
       onDoubleClick={reset}
       title="Drag to move · double-click to dock back"
-      className="pointer-events-auto absolute -left-2.5 -top-2.5 z-50 grid h-6 w-6 cursor-move select-none place-items-center rounded-full border-[1.5px] border-black-ink bg-paper text-[11px] leading-none text-black-ink/60 opacity-0 shadow-[2px_2px_0_rgba(0,0,0,.3)] transition-opacity hover:text-black-ink group-hover/dp:opacity-100 touch-none"
+      className="pointer-events-none absolute -left-2.5 -top-2.5 z-50 grid h-6 w-6 cursor-move select-none place-items-center rounded-full border-[1.5px] border-black-ink bg-paper text-[11px] leading-none text-black-ink/60 opacity-0 shadow-[2px_2px_0_rgba(0,0,0,.3)] transition-opacity group-hover/dp:pointer-events-auto group-hover/dp:opacity-100 touch-none"
     >
       ⠿
     </span>
@@ -196,7 +226,7 @@ export function DraggablePanel({
         <span
           onPointerDown={startResize}
           title="Drag to resize"
-          className="pointer-events-auto absolute -bottom-2 -right-2 z-50 grid h-5 w-5 cursor-nwse-resize select-none place-items-center rounded-sm border-[1.5px] border-black-ink bg-paper text-[8px] leading-none text-black-ink/60 opacity-0 shadow-[2px_2px_0_rgba(0,0,0,.3)] group-hover/dp:opacity-100 touch-none"
+          className="pointer-events-none absolute -bottom-2 -right-2 z-50 grid h-5 w-5 cursor-nwse-resize select-none place-items-center rounded-sm border-[1.5px] border-black-ink bg-paper text-[8px] leading-none text-black-ink/60 opacity-0 shadow-[2px_2px_0_rgba(0,0,0,.3)] group-hover/dp:pointer-events-auto group-hover/dp:opacity-100 touch-none"
         >
           ◢
         </span>

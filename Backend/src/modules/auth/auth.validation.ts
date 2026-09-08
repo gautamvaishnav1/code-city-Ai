@@ -54,9 +54,15 @@ export const githubAuthSchema = z.object({
   code: z.string().trim().min(5).max(200)
 });
 
+/** Opaque refresh token issued by login/verify-otp/OAuth. */
+export const refreshTokenSchema = z.object({
+  refreshToken: z.string().trim().min(20, "Refresh token is required").max(512)
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
 export type ResendOtpInput = z.infer<typeof resendOtpSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;

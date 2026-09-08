@@ -132,7 +132,9 @@ Open `http://localhost:5199`, paste a GitHub repo URL (or use the bundled demo),
 
 ## 🔧 Configuration
 
-All backend config lives in `Backend/.env` (see `.env.example` for the full annotated list):
+All backend config lives in `Backend/.env` (see `.env.example` for the full annotated list).
+**Where to find every credential (SMTP, GitHub token, OAuth, LLM keys) step-by-step:**
+[`Backend/docs/PRODUCTION_CONFIG.md`](Backend/docs/PRODUCTION_CONFIG.md).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -166,6 +168,24 @@ Auth: `Authorization: Bearer *** where required.
 
 ---
 
+## 🛠️ Repo URL Caching
+
+If a user pastes a GitHub repository URL that already has a completed analysis in the database, CodeCity AI will **skip re-analysis** and immediately use the cached results. This provides:
+
+- **Instant feedback** — no need to wait for re-download/parse/re-analyze
+- **Consistent results** — same repo always produces the same cached city plan
+- **Rate limit savings** — avoids unnecessary GitHub API calls for frequently-analyzed repos
+
+The check happens automatically when `POST /api/v1/projects/:id/analyze` is called. If a completed analysis exists for that repository URL, the pipeline returns the existing analysis ID immediately.
+
+Additionally, `POST /api/v1/repos/explain` accepts `{ url }` and — if **any** user has already analyzed that repository — returns a stored, human-readable repo explanation plus the full cached city plan in one response, so the frontend renders the city instantly with zero re-analysis. Project creation is idempotent (re-submitting the same `repoUrl` returns the existing project instead of a conflict error).
+
+📖 Full developer documentation: [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md)
+
+To take advantage of caching, simply analyze the same repo URL multiple times — the second and subsequent attempts will return instantly from the database.
+
+---
+
 ## 🧪 Scripts & tests
 
 ```bash
@@ -187,6 +207,9 @@ npm run lint         # eslint
 
 ## 🗺 Roadmap
 
+> 📐 **UX/3D improvement plan** — traffic speed, building overlap, label decluttering, world
+> cohesion: see [`docs/IMPROVEMENTS.md`](docs/IMPROVEMENTS.md).
+
 - [ ] Language support beyond JS/TS (Python, Go)
 - [ ] Persist & share city snapshots
 - [ ] Multi-repo "metro area" view
@@ -200,6 +223,7 @@ npm run lint         # eslint
 - Fork of [gautamvaishnav1/projects](https://github.com/gautamvaishnav1/projects) — original CodeCity concept & backend
 - `demo/` contains [SamiurRahmanMukul/Hotel-Room-Booking-System](https://github.com/SamiurRahmanMukul/Hotel-Room-Booking-System) as the sample analysis target
 - 3D assets: three.js example models, Poly Haven HDRIs
+- **Repo URL caching** — avoids re-analysis for previously-analyzed repositories
 
 ## 📄 License
 

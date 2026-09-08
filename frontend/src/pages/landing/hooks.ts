@@ -32,8 +32,10 @@ export function useOnScreen<T extends Element>(threshold = 0.05) {
     const el = ref.current;
     if (!el) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setOn(true);
-      return;
+      // reduced motion: show everything, but set state asynchronously —
+      // synchronous setState inside the effect body cascades renders
+      const raf = requestAnimationFrame(() => setOn(true));
+      return () => cancelAnimationFrame(raf);
     }
     const io = new IntersectionObserver(
       (es) => es.forEach((e) => setOn(e.isIntersecting)),

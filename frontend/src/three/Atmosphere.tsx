@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Stars } from "@react-three/drei";
 import * as THREE from "three";
@@ -21,10 +21,46 @@ const healthWeather = (s: any): Weather => {
   return "clear";
 };
 
+/** Gradient skydome — a huge back-side sphere whose horizon band tracks the
+ *  time-of-day color. Distant districts now melt into haze instead of
+ *  floating on flat black; the single biggest "this is a world" upgrade. */
+function SkyDome({ skyRef }: { skyRef: React.MutableRefObject<{ top: THREE.Color; bottom: THREE.Color } | null> }) {
+  const uniforms = useMemo(
+    () => ({
+      topColor: { value: new THREE.Color("#060a18") },
+      bottomColor: { value: new THREE.Color("#101a30") },
+    }),
+    [],
+  );
+  useEffect(() => {
+    skyRef.current = { top: uniforms.topColor.value, bottom: uniforms.bottomColor.value };
+    return () => { skyRef.current = null; };
+  }, [skyRef, uniforms]);
+  return (
+    <mesh renderOrder={-10} frustumCulled={false}>
+      <sphereGeometry args={[380, 24, 16]} />
+      <shaderMaterial
+        side={THREE.BackSide}
+        depthWrite={false}
+        fog={false}
+        uniforms={uniforms}
+        vertexShader={`varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`}
+        fragmentShader={`
+          uniform vec3 topColor; uniform vec3 bottomColor; varying vec3 vP;
+          void main(){
+            float h = clamp(normalize(vP).y, -0.05, 1.0);
+            gl_FragColor = vec4(mix(bottomColor, topColor, pow(h, 0.62)), 1.0);
+          }`}
+      />
+    </mesh>
+  );
+}
+
 export function Atmosphere() {
   const scene = useThree((s) => s.scene);
   const sun = useRef<THREE.DirectionalLight>(null!), moon = useRef<THREE.DirectionalLight>(null!), amb = useRef<THREE.AmbientLight>(null!), stars = useRef<THREE.Group>(null!);
   const acc = useRef(0), liveAcc = useRef(0), rainAcc = useRef(1), tmp = useMemo(() => new THREE.Color(), []);
+  const skyHandle = useRef<{ top: THREE.Color; bottom: THREE.Color } | null>(null);
   const cloudMat = useMemo(() => new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.2, depthWrite: false, fog: false }), []);
   const shadowMat = useMemo(() => new THREE.MeshBasicMaterial({ color: "#000", transparent: true, opacity: 0.15, depthWrite: false }), []);
   const clouds = useMemo(() => Array.from({ length: 9 }, () => ({ x: (Math.random() - .5) * 260, y: 53 + Math.random() * 5, z: (Math.random() - .5) * 200, s: 9 + Math.random() * 9, v: 1.5 + Math.random() * 2 })), []);
@@ -51,7 +87,14 @@ export function Atmosphere() {
     ENV.night = 1 - day; // ← restored: the whole scene keys off this
     tmp.copy(NIGHT).lerp(DAY, day).lerp(DUSK, dusk * 0.5).lerp(GRAY, ENV.cloud * 0.65 * (0.3 + day * 0.7));
     (scene.background as THREE.Color).copy(tmp);
-    const fog = scene.fog as THREE.FogExp2; fog.color.copy(tmp); fog.density = 0.002 + ENV.fog * 0.0075 + ENV.wet * 0.0008;
+    const fog = scene.fog as THREE.FogExp2; fog.color.copy(tmp);
+    // base density lifted 0.002 → 0.0026: distant districts melt into haze
+    fog.density = 0.0026 + ENV.fog * 0.0075 + ENV.wet * 0.0008;
+    // skydome tracks the sky: darker zenith, lighter horizon band
+    if (skyHandle.current) {
+      skyHandle.current.top.copy(tmp).multiplyScalar(0.55);
+      skyHandle.current.bottom.copy(tmp).multiplyScalar(1.45);
+    }
     (scene as any).environmentIntensity = 0.1 + day * 0.7;
     sun.current.position.set(Math.cos(a) * -90, Math.sin(a) * 90, 30);
     sun.current.intensity = day * 1.5 * (1 - ENV.cloud * 0.75);
@@ -68,6 +111,7 @@ export function Atmosphere() {
 
   return (
     <group>
+      <SkyDome skyRef={skyHandle} />
       <ambientLight ref={amb} intensity={0.4} />
       <hemisphereLight args={["#8ecbe8", "#1a2418", 0.25]} />
       <directionalLight ref={sun} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={-110} shadow-camera-right={110} shadow-camera-top={110} shadow-camera-bottom={-110} />

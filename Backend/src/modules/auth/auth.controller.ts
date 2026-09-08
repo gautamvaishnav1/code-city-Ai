@@ -19,8 +19,8 @@ export const register = asyncHandler(async (req, res) => {
 
 export const verifyOtp = asyncHandler(async (req, res) => {
   const { email, code } = req.body as { email: string; code: string };
-  const { user, token } = await authService.verifyRegistration(email, code);
-  res.status(200).json({ success: true, data: { user, token } });
+  const { user, accessToken, refreshToken } = await authService.verifyRegistration(email, code);
+  res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
 export const resendOtp = asyncHandler(async (req, res) => {
@@ -32,8 +32,28 @@ export const resendOtp = asyncHandler(async (req, res) => {
 /* -------------------------------- login -------------------------------- */
 
 export const login = asyncHandler(async (req, res) => {
-  const { user, token } = await authService.loginUser(req.body as never);
-  res.status(200).json({ success: true, data: { user, token } });
+  const { user, accessToken, refreshToken } = await authService.loginUser(req.body as never);
+  // `token` kept for backward compatibility — it IS the access token
+  res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
+});
+
+/* ------------------------- refresh + logout ------------------------------ */
+
+/** POST /api/v1/auth/refresh — rotates the refresh token, returns a new pair. */
+export const refresh = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body as { refreshToken: string };
+  const data = await authService.rotateRefreshToken(refreshToken);
+  res.status(200).json({
+    success: true,
+    data: { user: data.user, token: data.accessToken, refreshToken: data.refreshToken }
+  });
+});
+
+/** POST /api/v1/auth/logout — revokes the presented refresh token. */
+export const logout = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body as { refreshToken?: string };
+  if (refreshToken) await authService.revokeRefreshToken(refreshToken);
+  res.status(200).json({ success: true, message: "Logged out." });
 });
 
 /* ---------------------------- forgot password --------------------------- */
@@ -97,8 +117,10 @@ async function finishOAuth(
   }
   try {
     const profile = await exchangeCodeForProfile(provider, code);
-    const { user, token } = await authService.loginOrCreateFromOAuth(provider, profile);
-    const params = new URLSearchParams({ token, email: user.email, name: user.name });
+    const { user, accessToken } = await authService.loginOrCreateFromOAuth(provider, profile);
+    // NOTE: refresh token intentionally NOT put in the URL — redirect flows
+    // can adopt it later via an httpOnly cookie or the SPA POST endpoints.
+    const params = new URLSearchParams({ token: accessToken, email: user.email, name: user.name });
     res.redirect(`${env.frontendUrl}/auth/success?${params.toString()}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "OAuth failed";
@@ -120,16 +142,16 @@ export const githubCallback = asyncHandler(async (req, res) => {
 export const googleIdTokenLogin = asyncHandler(async (req, res) => {
   const { credential } = req.body as { credential: string };
   const profile = await verifyGoogleIdToken(credential);
-  const { user, token } = await authService.loginOrCreateFromOAuth("google", profile);
-  res.status(200).json({ success: true, data: { user, token } });
+  const { user, accessToken, refreshToken } = await authService.loginOrCreateFromOAuth("google", profile);
+  res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
 /** POST /api/v1/auth/github — code flow for SPAs that captured the redirect themselves. */
 export const githubCodeLogin = asyncHandler(async (req, res) => {
   const { code } = req.body as { code: string };
   const profile = await exchangeCodeForProfile("github", code);
-  const { user, token } = await authService.loginOrCreateFromOAuth("github", profile);
-  res.status(200).json({ success: true, data: { user, token } });
+  const { user, accessToken, refreshToken } = await authService.loginOrCreateFromOAuth("github", profile);
+  res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
 export const me = asyncHandler(async (req, res) => {

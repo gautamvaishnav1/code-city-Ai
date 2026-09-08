@@ -3,8 +3,12 @@ import { asyncHandler } from "../../shared/utils/async-handler";
 import * as projectService from "./project.service";
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
-  const project = await projectService.createProject(req.user!.id, req.body as never);
-  res.status(201).json({ success: true, data: { project } });
+  const { project, reused } = await projectService.createProject(req.user!.id, req.body as never);
+  res.status(reused ? 200 : 201).json({
+    success: true,
+    message: reused ? "Existing project for this repository returned" : "Project created",
+    data: { project, reused }
+  });
 });
 
 export const list = asyncHandler(async (req: Request, res: Response) => {

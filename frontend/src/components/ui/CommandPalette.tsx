@@ -35,6 +35,9 @@ function PaletteInner({ onClose, items }: { onClose: () => void; items: PaletteI
     [items, q],
   );
 
+  // highlight stays in bounds when the filter shrinks (derived, no effect)
+  const active = Math.min(idx, Math.max(0, filtered.length - 1));
+
   useEffect(() => {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
@@ -48,7 +51,7 @@ function PaletteInner({ onClose, items }: { onClose: () => void; items: PaletteI
       setIdx((i) => Math.max(0, i - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      filtered[idx]?.run();
+      filtered[active]?.run();
       onClose();
     } else if (e.key === "Escape") {
       onClose();
@@ -70,6 +73,9 @@ function PaletteInner({ onClose, items }: { onClose: () => void; items: PaletteI
         transition={{ type: "spring", stiffness: 300, damping: 28 }}
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
         onKeyDown={onKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         className="w-[min(560px,92vw)] overflow-hidden rounded-none border-[1.5px] border-black-ink bg-paper text-black-ink shadow-[8px_8px_0_rgba(20,20,20,.35)]"
       >
         <div className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
@@ -86,26 +92,28 @@ function PaletteInner({ onClose, items }: { onClose: () => void; items: PaletteI
           />
           <kbd className="cc-kbd">esc</kbd>
         </div>
-        <div className="max-h-[46vh] overflow-y-auto p-2">
+        <div className="max-h-[46vh] overflow-y-auto p-2" role="listbox" aria-label="Commands">
           {filtered.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-black-ink/45">No matches</div>
           )}
           {filtered.map((it, i) => (
             <button
               key={it.id}
+              role="option"
+              aria-selected={i === active}
               onMouseEnter={() => setIdx(i)}
               onClick={() => {
                 it.run();
                 onClose();
               }}
               className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm ${
-                i === idx ? "bg-black-ink text-paper" : "text-black-ink/75 hover:bg-black-ink/10"
+                i === active ? "bg-black-ink text-paper" : "text-black-ink/75 hover:bg-black-ink/10"
               }`}
             >
               <span>{it.label}</span>
               <span className="flex items-center gap-3">
                 {it.hint && <span className="font-mono text-[11px] text-black-ink/45">{it.hint}</span>}
-                {i === idx && <CornerDownLeft size={13} className="text-signal" />}
+                {i === active && <CornerDownLeft size={13} className="text-signal" />}
               </span>
             </button>
           ))}
