@@ -154,6 +154,23 @@ export const githubCodeLogin = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
+export const oauthCallback = asyncHandler(async (req, res) => {
+  const { token, email, name } = req.body as { token?: string; email?: string; name?: string };
+  if (!token) return res.status(400).json({ success: false, message: "Missing token" });
+
+  try {
+    const resApi = await fetch(`${env.frontendUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = (await resApi.json()) as { success: boolean; user?: { id: string; name: string; email: string; provider?: string } };
+    if (!data.success || !data.user) throw new Error("Invalid user session");
+
+    res.status(200).json({ success: true, user: data.user, redirect: "/#app" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err instanceof Error ? err.message : "OAuth callback failed" });
+  }
+});
+
 export const me = asyncHandler(async (req, res) => {
   const user = await authService.getUserById(req.user!.id);
   res.status(200).json({ success: true, data: { user } });

@@ -8,7 +8,7 @@ const HUD = lazy(() =>
 import { CommandPalette, type PaletteItem } from "./components/ui/CommandPalette";
 import { AuthModal } from "./components/AuthModal";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { completeOauthFromUrl, useAuth } from "./lib/auth";
+import { completeOauthFromUrl, oauthCallbackApi, useAuth } from "./lib/auth";
 import { togglePalette, useUi } from "./store/useUi";
 import { CursorGlow, Noise } from "./components/ui/effects";
 
@@ -55,7 +55,7 @@ export default function App() {
     return () => cancelIdleCallback?.(id);
   }, [preloadCity]);
 
-  // finish OAuth redirects: server bounces back with #oauth=<token>
+  // finish OAuth redirects: server bounces back with #oauth=<token> or API callback
   useEffect(() => {
     void completeOauthFromUrl().then((session) => {
       if (!session) {
@@ -67,6 +67,13 @@ export default function App() {
       sessionStorage.removeItem("cc-auth-intent");
       if (intent === "app" || location.hash.includes("#app")) {
         location.hash = "#app";
+        setView("app");
+      }
+    });
+    // Also try the API callback approach for SPA flows
+    void oauthCallbackApi().then((apiResult) => {
+      if (apiResult.success && apiResult.redirect) {
+        location.hash = apiResult.redirect.replace("/#", "#");
         setView("app");
       }
     });

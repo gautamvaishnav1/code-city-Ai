@@ -119,6 +119,31 @@ export async function completeOauthFromUrl(): Promise<{ token: string; user: Aut
   }
 }
 
+/** Handle OAuth callback API response from browser redirect after OAuth complete.
+ *  Backend redirects browser to /auth/success?..., but we also support an API call
+ *  that returns JSON { success, user, redirect } for SPA-driven flows. */
+export async function oauthCallbackApi(): Promise<{ success: boolean; user?: AuthUser; redirect?: string }> {
+  // Try to get token from hash or query first
+  let token: string | null = null;
+  const hashMatch = location.hash.match(/#oauth=([^&]+)/);
+  if (hashMatch) {
+    token = decodeURIComponent(hashMatch[1]);
+  } else {
+    const searchToken = new URLSearchParams(location.search).get("token");
+    if (searchToken) token = searchToken;
+  }
+  if (!token) return { success: false };
+
+  try {
+    const res = await fetch(`${AUTH_URL}/me`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = (await res.json()) as ApiEnvelope<{ user: AuthUser }>;
+    if (!res.ok || !json.data?.user) throw new Error(json.message ?? `HTTP ${res.status}`);
+    return { success: true, user: json.data.user, redirect: "/#app" };
+  } catch {
+    return { success: false };
+  }
+}
+
 function persist(token: string, user: AuthUser) {
   localStorage.setItem("cc-token", token);
   localStorage.setItem("cc-user", JSON.stringify(user));

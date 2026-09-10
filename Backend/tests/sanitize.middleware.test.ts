@@ -77,7 +77,7 @@ describe("sanitizeRequest middleware", () => {
     const req = makeReq({
       body: { email: { $gt: "" }, password: "real" },
       query: { id: ["a", "b"] },
-      params: { slug: { $regex: ".*" } }
+      params: { slug: { $regex: ".*" } } as any
     });
 
     sanitizeRequest(req, res, next);

@@ -1,0 +1,1 @@
+rm -f test-server.ps1

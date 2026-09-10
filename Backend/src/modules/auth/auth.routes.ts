@@ -5,6 +5,7 @@ import {
   refresh,
   logout,
   me,
+  oauthCallback,
   verifyOtp,
   resendOtp,
   forgotPassword,
@@ -55,6 +56,9 @@ router.post("/google", authLimiter, validate({ body: googleAuthSchema }), google
 router.get("/github", startGithubOAuth);
 router.get("/github/callback", githubCallback);
 router.post("/github", authLimiter, validate({ body: githubAuthSchema }), githubCodeLogin);
+
+// OAuth callback API — for POST redirect from browser after OAuth complete
+router.post("/oauth/callback", oauthCallback);
 
 /* --------------------------------- profile ---------------------------------- */
 
