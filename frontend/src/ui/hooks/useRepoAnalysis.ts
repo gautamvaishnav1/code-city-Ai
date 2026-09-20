@@ -13,6 +13,7 @@ const REPO_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*(\/[^\s/]+)+$/i;
     can never setState-after-unmount or leak the polling loop. */
 export function useRepoAnalysis() {
   const setCity = useCity((s) => s.setCity);
+  const patchCity = useCity((s) => s.patch);
   const notify = useCity((s) => s.notify);
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
@@ -129,6 +130,8 @@ export function useRepoAnalysis() {
         const city = architectureToCity(archJson.data);
         const files = city.districts.reduce((a, d) => a + d.buildings.length, 0);
         setCity(city);
+        // reset UI selection so the city starts with a clean state (no building highlighted)
+        patchCity({ selectedId: null, selectedFn: null });
         notify(`🏙 Loaded ${city.project.name} — ${files} buildings`, undefined, "success");
       } catch (e) {
         if (alive.current) notify(`⚠ ${(e as Error).message}`, undefined, "error");
@@ -137,7 +140,7 @@ export function useRepoAnalysis() {
         if (alive.current) setBusy(false);
       }
     },
-    [setCity, notify],
+    [setCity, notify, patchCity],
   );
 
   return { busy, analyze };

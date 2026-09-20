@@ -208,6 +208,7 @@ export function Building({ b }: { b: LaidBuilding }) {
     <group position={b.pos}>
       <group
         onClick={(e) => { e.stopPropagation(); select(b.id); setFocus(b.pos[0], b.pos[2]); }}
+        onDoubleClick={() => select(null)}
         onPointerOver={(e) => { e.stopPropagation(); setHover(true); document.body.style.cursor = "pointer"; }}
         onPointerOut={() => { setHover(false); document.body.style.cursor = "auto"; }}
       >

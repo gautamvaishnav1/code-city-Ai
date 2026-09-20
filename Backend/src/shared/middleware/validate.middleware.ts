@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import type { ZodTypeAny } from "zod";
+import type { ZodTypeAny, ZodError } from "zod";
 import { ApiError } from "../utils/api-error";
 
 interface Schemas {
@@ -18,21 +18,21 @@ export function validate(schemas: Schemas) {
       if (schemas.params) {
         const result = schemas.params.safeParse(req.params);
         if (!result.success) {
-          throw ApiError.badRequest("Invalid URL parameters", formatIssues(result));
+          throw ApiError.badRequest("Invalid URL parameters", formatIssues(result.error!));
         }
         Object.assign(req.params, result.data);
       }
       if (schemas.query) {
         const result = schemas.query.safeParse(req.query);
         if (!result.success) {
-          throw ApiError.badRequest("Invalid query parameters", formatIssues(result));
+          throw ApiError.badRequest("Invalid query parameters", formatIssues(result.error!));
         }
         Object.assign(req.query, result.data);
       }
       if (schemas.body) {
         const result = schemas.body.safeParse(req.body);
         if (!result.success) {
-          throw ApiError.badRequest("Validation failed", formatIssues(result));
+          throw ApiError.badRequest("Validation failed", formatIssues(result.error!));
         }
         req.body = result.data;
       }
@@ -43,8 +43,8 @@ export function validate(schemas: Schemas) {
   };
 }
 
-function formatIssues(result: { error: { issues: Array<{ path: PropertyKey[]; message: string }> } }) {
-  return result.error.issues.map((issue) => ({
+function formatIssues(error: ZodError) {
+  return error.issues.map((issue) => ({
     field: issue.path.join(".") || "(root)",
     message: issue.message
   }));
