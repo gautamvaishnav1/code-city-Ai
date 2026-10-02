@@ -75,7 +75,7 @@ const analysisSchema = new mongoose.Schema<AnalysisDocument>(
 );
 
 // powers POST /repos/explain — latest completed analysis per repository
-analysisSchema.index({ "repoInfo.fullName": 1, status: 1, createdAt: -1 });
+// analysisSchema.index({ "repoInfo.fullName": 1, status: 1, createdAt: -1 });
 
 export const AnalysisModel = mongoose.model<AnalysisDocument>("Analysis", analysisSchema);
 

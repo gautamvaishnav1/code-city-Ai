@@ -12,7 +12,14 @@ export async function connectDB(uri: string): Promise<void> {
     logger.warn("MongoDB disconnected");
   });
 
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000 });
+  await mongoose.connect(uri, {
+    serverSelectionTimeoutMS: 5_000,
+    connectTimeoutMS: 10_000,
+    socketTimeoutMS: 45_000,
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    waitQueueTimeoutMS: 3_000,
+  });
 }
 
 export async function disconnectDB(): Promise<void> {
