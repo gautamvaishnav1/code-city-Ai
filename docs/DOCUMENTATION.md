@@ -4,7 +4,9 @@
 > Every file becomes a building · every dependency a road · every API route a glowing pipeline.
 
 This is the main developer handbook for the monorepo. For API payload examples see
-[`Backend/docs/`](../Backend/docs/) · for the marketing overview see [`README.md`](../README.md).
+[`Backend/docs/`](../Backend/docs/) · for the marketing overview see [`README.md`](../README.md) ·
+for a deep dive on how the frontend consumes the backend see
+[`FRONTEND-BACKEND-DATA-FLOW.md`](./FRONTEND-BACKEND-DATA-FLOW.md).
 
 ---
 
@@ -98,6 +100,9 @@ projects/
 ---
 
 ## 4. System architecture & data flow
+
+> Detailed walkthrough of the frontend network layer, endpoints consumed, auth,
+> and state flow: [`FRONTEND-BACKEND-DATA-FLOW.md`](./FRONTEND-BACKEND-DATA-FLOW.md).
 
 ```
 ┌────────────────────┐   /api (vite proxy)   ┌────────────────────────────────┐
@@ -280,6 +285,8 @@ all project-scoped endpoints still enforce ownership (`getOwnedProject`).
 
 ## 10. Frontend state management
 
+> How API responses land in these stores: [`FRONTEND-BACKEND-DATA-FLOW.md`](./FRONTEND-BACKEND-DATA-FLOW.md) §7.
+
 > **Zustand only — there is no Redux anywhere in this project.**
 > Nothing needs to be deleted; `package.json` has zero redux dependencies
 > (`@reduxjs/toolkit`, `react-redux`, `redux` are absent) and a full source search finds
@@ -326,8 +333,11 @@ Prioritized, concrete suggestions:
    resume orphaned `running` docs on boot).
 4. **CI pipeline** — GitHub Actions running `npm run typecheck && npm test` (Backend) and
    `npm run lint && npm run build` (frontend) on every PR.
-5. **Refresh tokens / JWT expiry strategy** — tokens currently have no refresh rotation;
-   add short-lived access + refresh token, or document session lifetime explicitly.
+5. **Refresh tokens / JWT expiry strategy** — ✅ done. The frontend now performs
+   silent refresh-token rotation (`POST /auth/refresh`, single-flight, httpOnly
+   `cc_rt` cookie for OAuth) — expired access tokens are renewed and requests
+   replayed without ever showing an "invalid/expired token" error. See
+   [`FRONTEND-BACKEND-DATA-FLOW.md`](./FRONTEND-BACKEND-DATA-FLOW.md) §4.
 
 ### Medium
 6. **Pagination & filtering** on `GET /projects` (currently hard limit 100).

@@ -4,7 +4,8 @@ import type {
   FileFacts,
   FunctionFact,
   ProjectMetadata,
-  ProjectStats
+  ProjectStats,
+  RuntimeSignals
 } from "./parser.types";
 
 export interface RepoInfoLite {
@@ -87,6 +88,46 @@ export function buildProjectMetadata(
     durationMs
   };
 
+  // aggregate ES6+ syntax signals across all files
+  const syntax = {
+    es6PlusFiles: facts.filter((f) => f.syntax?.isES6Plus).length,
+    totalFiles: facts.length,
+    arrowFunctions: facts.filter((f) => f.syntax?.hasArrowFunctions).length,
+    asyncAwait: facts.filter((f) => f.syntax?.hasAsyncAwait).length,
+    templateLiterals: facts.filter((f) => f.syntax?.hasTemplateLiterals).length,
+    destructuring: facts.filter((f) => f.syntax?.hasDestructuring).length,
+    classes: facts.filter((f) => f.syntax?.hasClasses).length,
+    modules: facts.filter((f) => f.syntax?.hasModules).length
+  };
+
+  // aggregate runtime/diagnostic signals across all files
+  const signals: RuntimeSignals = facts.reduce(
+    (acc, f) => {
+      const s = f.signals;
+      if (!s) return acc;
+      return {
+        processEnvUsage: acc.processEnvUsage + s.processEnvUsage,
+        consoleErrorCalls: acc.consoleErrorCalls + s.consoleErrorCalls,
+        consoleWarnCalls: acc.consoleWarnCalls + s.consoleWarnCalls,
+        consoleLogCalls: acc.consoleLogCalls + s.consoleLogCalls,
+        awaitCalls: acc.awaitCalls + s.awaitCalls,
+        swallowedErrors: acc.swallowedErrors + s.swallowedErrors,
+        requireCalls: acc.requireCalls + s.requireCalls,
+        cjsExports: acc.cjsExports + s.cjsExports
+      };
+    },
+    {
+      processEnvUsage: 0,
+      consoleErrorCalls: 0,
+      consoleWarnCalls: 0,
+      consoleLogCalls: 0,
+      awaitCalls: 0,
+      swallowedErrors: 0,
+      requireCalls: 0,
+      cjsExports: 0
+    }
+  );
+
   return {
     generatedAt: new Date().toISOString(),
     project: {
@@ -97,6 +138,8 @@ export function buildProjectMetadata(
       primaryLanguage: repo.primaryLanguage
     },
     stats,
+    syntax,
+    signals,
     dependencies: deps.dependencies,
     devDependencies: deps.devDependencies,
     files: facts.map((f) => ({ path: f.path, bytes: f.bytes, lines: f.lines, role: f.role })),

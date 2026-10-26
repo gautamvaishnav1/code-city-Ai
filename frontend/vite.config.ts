@@ -14,6 +14,12 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: false,
       },
+      // socket.io streams real analysis progress (same origin, no CORS)
+      '/socket.io': {
+        target: 'http://localhost:5000',
+        ws: true,
+        changeOrigin: false,
+      },
     },
   },
 })

@@ -29,7 +29,11 @@ export function useAsyncAction<A extends unknown[]>(
       const out = await task(...args);
       if (alive.current) setText(out);
     } catch (e) {
-      if (alive.current) setText(`AI unavailable: ${(e as Error).message}`);
+      // silent = session ended by the refresh layer — never surface token errors
+      if (alive.current) {
+        if ((e as { silent?: boolean }).silent) setText(null);
+        else setText(`AI unavailable: ${(e as Error).message}`);
+      }
     } finally {
       busyRef.current = false;
       if (alive.current) setBusy(false);

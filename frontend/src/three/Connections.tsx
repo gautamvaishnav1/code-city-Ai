@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import type { CityLayout } from "../lib/layout";
 import type { EdgeNode } from "../types";
@@ -14,13 +14,27 @@ const EDGE_COLOR: Record<EdgeNode["kind"], string> = {
 /** packets per connection — more on active links so the flow reads clearly */
 const PACKETS = 3;
 
+/** invisible click target radius — the visible tube is only 0.09 wide, far too
+ *  thin to hit reliably; this fatter shell makes the whole bubble lane grabbable */
+const HIT_R = 0.8;
+
 function Arc({ edge, layout, phase }: { edge: EdgeNode; layout: CityLayout; phase: number }) {
   const selectedId = useCity((s) => s.selectedId);
+  const pickedEdge = useCity((s) => s.selectedEdge);
   const linksOn = useCity((s) => s.links);
+  const selectEdge = useCity((s) => s.selectEdge);
   const group = useRef<THREE.Group>(null);
   const packets = useRef<(THREE.Mesh | null)[]>([]);
   const mat = useRef<THREE.MeshBasicMaterial>(null);
-  const active = selectedId === edge.from || selectedId === edge.to;
+  /** this exact connection is the one the user clicked */
+  const picked =
+    !!pickedEdge &&
+    pickedEdge.from === edge.from &&
+    pickedEdge.to === edge.to &&
+    pickedEdge.kind === edge.kind;
+  const active = picked || selectedId === edge.from || selectedId === edge.to;
+  /** mirrors group.visible — the hit target only exists while the arc is on screen */
+  const shown = linksOn || active;
 
   const curve = useMemo(() => {
     const a = layout.byId.get(edge.from);
@@ -38,6 +52,35 @@ function Arc({ edge, layout, phase }: { edge: EdgeNode; layout: CityLayout; phas
     return new THREE.TubeGeometry(curve, 32, 0.09, 5, false);
   }, [curve]);
   useEffect(() => () => geo?.dispose(), [geo]);
+
+  /** fat invisible shell used purely as a click target — mounted only while the
+   *  arc is on screen, so a hidden arc can never swallow a click meant for a
+   *  building behind it. */
+  const hitGeo = useMemo(
+    () => (curve ? new THREE.TubeGeometry(curve, 24, HIT_R, 6, false) : null),
+    [curve],
+  );
+  useEffect(
+    () => () => {
+      hitGeo?.dispose();
+      document.body.style.cursor = "auto"; // never leave a stuck pointer cursor
+    },
+    [hitGeo],
+  );
+
+  /** click the bubble → HUD card naming both modules and how they talk.
+   *  stopPropagation keeps the Canvas' onPointerMissed from clearing the pick. */
+  const pick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    selectEdge({ from: edge.from, to: edge.to, kind: edge.kind });
+  };
+  const over = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    document.body.style.cursor = "pointer";
+  };
+  const out = () => {
+    document.body.style.cursor = "auto";
+  };
 
   useFrame(({ clock }) => {
     if (!group.current || !geo || !curve) return;
@@ -76,8 +119,25 @@ function Arc({ edge, layout, phase }: { edge: EdgeNode; layout: CityLayout; phas
           toneMapped={false}
         />
       </mesh>
+      {/* grab-target: invisible but fat, and only present while visible */}
+      {shown && hitGeo && (
+        <mesh
+          geometry={hitGeo}
+          onClick={pick}
+          onPointerOver={over}
+          onPointerOut={out}
+        >
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} toneMapped={false} />
+        </mesh>
+      )}
       {Array.from({ length: PACKETS }).map((_, i) => (
-        <mesh key={i} ref={(el) => { packets.current[i] = el; }}>
+        <mesh
+          key={i}
+          ref={(el) => { packets.current[i] = el; }}
+          onClick={pick}
+          onPointerOver={over}
+          onPointerOut={out}
+        >
           <sphereGeometry args={[0.3, 8, 8]} />
           <meshBasicMaterial color={EDGE_COLOR[edge.kind]} transparent opacity={0.9} toneMapped={false} />
         </mesh>

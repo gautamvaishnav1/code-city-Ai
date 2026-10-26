@@ -11,6 +11,7 @@ import { tryIO } from "../../infrastructure/realtime/io";
 import { logger } from "../../shared/utils/logger";
 import { ApiError } from "../../shared/utils/api-error";
 import type { Architecture, CityWorld } from "./analysis.types";
+import fs from "node:fs";
 
 const roomFor = (projectId: string) => `project:${projectId}`;
 
@@ -54,9 +55,12 @@ export async function startAnalysis(
   }
 
   if (repoFullName) {
+    // Case-insensitive match: GitHub repo names are case-insensitive, but the
+    // user-typed URL may differ from the canonical casing stored by the API.
+    const escaped = repoFullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const cached = await AnalysisModel.findOne({
       status: "completed",
-      "repoInfo.fullName": repoFullName
+      "repoInfo.fullName": { $regex: `^${escaped}$`, $options: "i" }
     })
       .sort({ createdAt: -1 })
       .lean();
@@ -173,6 +177,17 @@ async function runPipeline({ analysis, project, projectId, analysisId, repoUrl }
     ? await loadDemoProject()
     : await downloadAndExtractRepo(repoUrl, analysisId);
   try {
+    // Guard: a tarball that extracts to an empty dir would poison the cache
+    // with a bogus "completed" analysis (strip-components mismatch, corrupt archive, etc.)
+    if (!isDemo) {
+      const extracted = fs.readdirSync(dir);
+      if (extracted.length === 0) {
+        throw ApiError.badGateway(
+          `Repository archive for ${info.fullName} extracted to zero files — archive may be corrupt`
+        );
+      }
+    }
+
     // 2. Scanner + parser + analyzer (per-file fault tolerance inside)
     step("scan", { message: "Scanning .js/.jsx/.ts/.tsx files…" }, 10);
 

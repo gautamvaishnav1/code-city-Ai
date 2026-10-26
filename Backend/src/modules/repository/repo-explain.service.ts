@@ -42,11 +42,13 @@ export interface RepoExplanationPayload {
  */
 export async function explainRepo(url: string): Promise<RepoExplanationPayload> {
   const parsed = parseGitHubUrl(url);
-  const fullName = `${parsed.owner}/${parsed.repo}`.toLowerCase();
+  const fullName = `${parsed.owner}/${parsed.repo}`;
 
+  // Case-insensitive match: the URL may differ from the canonical casing stored by the API
+  const escaped = fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const doc = (await AnalysisModel.findOne({
     status: "completed",
-    "repoInfo.fullName": fullName
+    "repoInfo.fullName": { $regex: `^${escaped}$`, $options: "i" }
   })
     .sort({ createdAt: -1 })
     .limit(1)) as AnalysisDocument | null;

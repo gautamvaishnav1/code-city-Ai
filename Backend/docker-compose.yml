@@ -5,14 +5,22 @@ services:
     container_name: express_mongo_version1
     restart: always
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
+      # Override these via a .env file — never commit real credentials.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS:-password123}
+    # Bound to loopback only: the DB must NOT be reachable from the network.
+    # Remove "127.0.0.1:" if another container on this compose network needs it.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      # Authenticate before pinging — otherwise the check fails once auth is on.
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet -u \"$${MONGO_INITDB_ROOT_USERNAME}\" -p \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.runCommand({ping:1}).ok'"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

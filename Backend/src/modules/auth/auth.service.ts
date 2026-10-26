@@ -38,8 +38,8 @@ function toPublicUser(user: UserDocument): PublicUser {
   };
 }
 
-function issueTokenFor(user: UserDocument): string {
-  return signAccessToken({ sub: user._id.toString(), email: user.email });
+function issueTokenFor(user: UserDocument, guest = false): string {
+  return signAccessToken({ sub: user._id.toString(), email: user.email, ...(guest ? { guest: true } : {}) });
 }
 
 /* ------------------------ refresh-token session pair ----------------------- */
@@ -68,7 +68,10 @@ async function issueSession(user: UserDocument): Promise<SessionTokens> {
       }
     }
   );
-  return { accessToken: issueTokenFor(user), refreshToken };
+  // the guest claim is derived from the ACCOUNT, never from the presented
+  // token — otherwise a guest refresh (rotation) would silently drop the
+  // flag and unlock real-repository analysis.
+  return { accessToken: issueTokenFor(user, user.provider === "guest"), refreshToken };
 }
 
 /**
@@ -203,6 +206,38 @@ export async function loginUser(
       ...devCodePayload(result)
     });
   }
+  return { user: toPublicUser(user), ...(await issueSession(user)) };
+}
+
+/* ------------------------------ guest session ----------------------------- */
+
+/**
+ * POST /api/v1/auth/guest — an anonymous session so the bundled demo works
+ * with zero friction ("open the demo, no sign-up wall").
+ *
+ * A guest IS a real account record (analyses, projects and the refresh-token
+ * rotation all key off userId, and a phantom id would break /me), but:
+ *   • `provider: "guest"` → every access token carries `guest: true`
+ *     (see requireDemoForGuest), so only demo:// repositories are reachable;
+ *   • it has no password, so it can never be used to log in — signing in
+ *     properly always means creating/using a normal account.
+ * Rate-limited by authLimiter; guest rows past 30 days are pruned best-effort
+ * so the collection does not grow forever.
+ */
+export async function createGuestSession(): Promise<{ user: PublicUser } & SessionTokens> {
+  void UserModel.deleteMany({
+    provider: "guest",
+    createdAt: { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+  }).catch(() => undefined);
+
+  const email = `guest-${sha256(randomToken()).slice(0, 12)}@codecity.local`;
+  const user = await UserModel.create({
+    name: "Guest",
+    email,
+    provider: "guest",
+    isVerified: true, // nothing to verify — there is no inbox behind this address
+    passwordHash: ""
+  });
   return { user: toPublicUser(user), ...(await issueSession(user)) };
 }
 

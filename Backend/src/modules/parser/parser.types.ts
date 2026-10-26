@@ -80,11 +80,47 @@ export interface AuthIndicators {
   evidence: string[];
 }
 
+/** ES6+ syntax features detected in a single file. */
+export interface SyntaxFacts {
+  hasArrowFunctions: boolean;
+  hasTemplateLiterals: boolean;
+  hasDestructuring: boolean;
+  hasSpreadOperator: boolean;
+  hasAsyncAwait: boolean;
+  hasGenerators: boolean;
+  hasForOf: boolean;
+  hasDefaultParams: boolean;
+  hasClasses: boolean;
+  hasGettersSetters: boolean;
+  hasComputedProps: boolean;
+  hasLetConst: boolean;
+  hasModules: boolean; // import/export or require/module.exports
+  /** True if file uses any ES6+ feature beyond basic ES5. */
+  isES6Plus: boolean;
+}
+
+/** Runtime / diagnostic usage signals extracted from the AST. */
+export interface RuntimeSignals {
+  processEnvUsage: number;
+  consoleErrorCalls: number;
+  consoleWarnCalls: number;
+  consoleLogCalls: number;
+  awaitCalls: number;
+  /** try/catch blocks where the catch body does NOT rethrow (error swallowed). */
+  swallowedErrors: number;
+  /** require() call count (CommonJS modules). */
+  requireCalls: number;
+  /** module.exports or exports.xxx assignment count. */
+  cjsExports: number;
+}
+
 export interface FileFacts {
   path: string;
   lines: number;
   bytes: number;
   role: FileRole;
+  syntax?: SyntaxFacts;
+  signals?: RuntimeSignals;
   imports: ImportFact[];
   exports: ExportFact[];
   functions: FunctionFact[];
@@ -125,6 +161,19 @@ export interface ProjectMetadata {
     primaryLanguage?: string;
   };
   stats: ProjectStats;
+  /** Aggregated ES6+ syntax signals across all files. */
+  syntax?: {
+    es6PlusFiles: number;
+    totalFiles: number;
+    arrowFunctions: number;
+    asyncAwait: number;
+    templateLiterals: number;
+    destructuring: number;
+    classes: number;
+    modules: number;
+  };
+  /** Aggregated runtime/diagnostic signals across all files. */
+  signals?: RuntimeSignals;
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;
   files: Array<{ path: string; bytes: number; lines: number; role: FileRole }>;

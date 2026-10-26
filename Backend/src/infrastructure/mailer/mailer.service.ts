@@ -1,20 +1,55 @@
 import nodemailer from "nodemailer";
-import { env, smtpConfigured } from "../../config/env";
+import { env, isProd, smtpConfigured, smtpFallbackConfigured } from "../../config/env";
 import { logger } from "../../shared/utils/logger";
 
-let transporter: nodemailer.Transporter | null = null;
+/**
+ * Transporters are cached per-config so a rotated credential re-creates them.
+ * Primary is whatever SMTP_* points at (often Gmail); the fallback is an
+ * independent relay (Brevo/SendGrid/SES...) that is tried automatically when
+ * the primary send fails — Gmail SMTP is frequently blocked from PaaS hosts
+ * such as Render, so the fallback keeps OTP delivery alive there.
+ */
+let primaryCache: { key: string; transporter: nodemailer.Transporter } | null = null;
+let fallbackCache: { key: string; transporter: nodemailer.Transporter } | null = null;
 
-function getTransporter(): nodemailer.Transporter | null {
+function createTransporter(
+  host: string,
+  port: number,
+  user: string,
+  pass: string
+): nodemailer.Transporter {
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass }
+  });
+}
+
+function getPrimaryTransporter(): nodemailer.Transporter | null {
   if (!smtpConfigured()) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      secure: env.smtpPort === 465,
-      auth: { user: env.smtpUser, pass: env.smtpPass }
-    });
+  const key = `${env.smtpHost}:${env.smtpPort}:${env.smtpUser}`;
+  if (!primaryCache || primaryCache.key !== key) {
+    primaryCache = { key, transporter: createTransporter(env.smtpHost, env.smtpPort, env.smtpUser, env.smtpPass) };
   }
-  return transporter;
+  return primaryCache.transporter;
+}
+
+function getFallbackTransporter(): nodemailer.Transporter | null {
+  if (!smtpFallbackConfigured()) return null;
+  const key = `${env.smtpFallbackHost}:${env.smtpFallbackPort}:${env.smtpFallbackUser}`;
+  if (!fallbackCache || fallbackCache.key !== key) {
+    fallbackCache = {
+      key,
+      transporter: createTransporter(
+        env.smtpFallbackHost,
+        env.smtpFallbackPort,
+        env.smtpFallbackUser,
+        env.smtpFallbackPass
+      )
+    };
+  }
+  return fallbackCache.transporter;
 }
 
 export interface MailOptions {
@@ -25,26 +60,68 @@ export interface MailOptions {
 }
 
 /**
- * Sends an email via SMTP when configured; otherwise logs it so the OTP demo
- * still works with zero email setup (hackathon mode). Returns devOtp in that case.
+ * Sends an email via the primary SMTP, automatically retrying on the fallback
+ * relay when the primary fails. If neither is configured, logs the mail so the
+ * OTP demo still works with zero email setup (hackathon mode) and returns
+ * devOtp in that case.
  */
 export async function sendMail(options: MailOptions): Promise<{ delivered: boolean; devOtp?: string }> {
-  const transporter = getTransporter();
-  if (!transporter) {
+  const primary = getPrimaryTransporter();
+  const fallback = getFallbackTransporter();
+
+  // No SMTP at all (neither primary nor fallback configured).
+  if (!primary && !fallback) {
+    if (isProd) {
+      // Never log OTP codes or recipient emails in production — this would
+      // leak via the SSE log stream and enable account takeover.
+      logger.error("SMTP not configured; cannot send email in production", {
+        subject: options.subject
+      });
+      throw new Error("Email delivery is not configured");
+    }
     logger.warn(`[DEV MAIL] To:${options.to} | ${options.subject} | ${options.text}`);
     // surface the 6-digit code for local testing when SMTP is not configured
     const otpMatch = options.text.match(/\b(\d{6})\b/);
     return { delivered: false, devOtp: otpMatch?.[1] };
   }
-  try {
-    await transporter.sendMail({ from: env.mailFrom, ...options });
-    return { delivered: true };
-  } catch (err) {
-    logger.error("Mail send failed", {
-      error: err instanceof Error ? err.message : String(err)
-    });
-    throw err;
+
+  // 1. Try the primary transporter first (if present).
+  if (primary) {
+    try {
+      await primary.sendMail({ from: env.mailFrom, ...options });
+      return { delivered: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!fallback) {
+        // No fallback to save us — surface the failure.
+        logger.error("Mail send failed", { error: message });
+        throw err;
+      }
+      logger.warn("Primary SMTP send failed; retrying via fallback relay", {
+        error: message,
+        fallbackHost: env.smtpFallbackHost
+      });
+    }
   }
+
+  // 2. Fallback relay (Brevo / SendGrid / SES ...). Runs when the primary is
+  //    absent or just failed. Its own failure is terminal.
+  if (fallback) {
+    try {
+      const from = env.mailFallbackFrom || env.mailFrom;
+      await fallback.sendMail({ from, ...options });
+      return { delivered: true };
+    } catch (err) {
+      logger.error("Fallback SMTP send failed", {
+        error: err instanceof Error ? err.message : String(err),
+        fallbackHost: env.smtpFallbackHost
+      });
+      throw err;
+    }
+  }
+
+  // Unreachable in practice: guarded by the "no SMTP at all" branch above.
+  throw new Error("Email delivery is not configured");
 }
 
 export function otpEmailTemplate(code: string, purpose: "register" | "password_reset"): MailOptionsLike {

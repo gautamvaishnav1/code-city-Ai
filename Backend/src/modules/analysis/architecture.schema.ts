@@ -64,6 +64,108 @@ export function slugify(input: string): string {
   return base || "component";
 }
 
+/** Aliases the LLM (and heuristics) commonly emit → the canonical type the
+ *  city builder, district mapper and frontend renderer all agree on. Without
+ *  this, "page"/"view"/"react" silently land in the Core district and render
+ *  as generic `api` boxes — which is exactly how a repo's UI goes missing. */
+const TYPE_ALIASES: Record<string, string> = {
+  // UI surfaces
+  frontend: "frontend",
+  front_end: "frontend",
+  front: "frontend",
+  ui: "frontend",
+  view: "frontend",
+  page: "frontend",
+  pages: "frontend",
+  screen: "frontend",
+  screens: "frontend",
+  component: "frontend",
+  components: "frontend",
+  react: "frontend",
+  vue: "frontend",
+  svelte: "frontend",
+  angular: "frontend",
+  client: "frontend",
+  web: "frontend",
+  spa: "frontend",
+  // HTTP layer
+  route: "routes",
+  routes: "routes",
+  router: "routes",
+  routers: "routes",
+  endpoint: "routes",
+  endpoints: "routes",
+  controller: "controller",
+  controllers: "controller",
+  handler: "controller",
+  handlers: "controller",
+  routehandler: "controller",
+  service: "service",
+  services: "service",
+  business: "service",
+  logic: "service",
+  // data layer
+  model: "model",
+  models: "model",
+  schema: "model",
+  schemas: "model",
+  entity: "model",
+  entities: "model",
+  dao: "model",
+  repository: "model",
+  db: "database",
+  database: "database",
+  databases: "database",
+  datastore: "database",
+  storage: "database",
+  persistence: "database",
+  collection: "database",
+  // cross-cutting
+  middleware: "middleware",
+  middlewares: "middleware",
+  guard: "middleware",
+  interceptor: "middleware",
+  plugin: "middleware",
+  auth: "auth",
+  authentication: "auth",
+  authorization: "auth",
+  security: "auth",
+  session: "auth",
+  jwt: "auth",
+  oauth: "auth",
+  // outbound
+  integration: "integration",
+  integrations: "integration",
+  external: "external",
+  thirdparty: "external",
+  third_party: "external",
+  external_api: "external",
+  third_party_api: "external",
+  api_client: "external",
+  sdk: "external",
+  vendor: "external",
+  // plumbing — only the aliases that would otherwise fall through to "other"
+  // and lose their district; genuinely unknown types keep their raw slug so
+  // nothing that used to work moves district.
+  config: "config",
+  configuration: "config",
+  settings: "config",
+  env: "config",
+  bootstrap: "config",
+  entry: "config",
+  server: "config",
+  app: "config",
+  util: "config",
+  utils: "config",
+  helper: "config"
+};
+
+/** Canonical city type for any raw type string (idempotent). */
+export function canonicalType(raw: string): string {
+  const key = slugify(raw).replace(/-/g, "_");
+  return TYPE_ALIASES[key] ?? key;
+}
+
 /**
  * Normalizes AI output into a strict, frontend-safe architecture:
  * - stable kebab-case ids (regenerated when missing/duplicated)
@@ -88,7 +190,7 @@ export function normalizeArchitecture(raw: RawArchitectureInput): Architecture {
     components.push({
       id,
       name: c.name.trim().slice(0, 120),
-      type: slugify(c.type).replace(/-/g, "_"),
+      type: canonicalType(c.type),
       description: (c.description ?? "").trim().slice(0, 500) || undefined,
       files: Array.isArray(c.files) ? c.files.slice(0, 12).map((f) => f.replace(/\\/g, "/")) : []
     });

@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
-export type AuthProvider = "local" | "google" | "github";
+/** `guest` = an anonymous session minted for the bundled demo (POST /auth/guest).
+ *  Guest accounts can only open demo:// projects — real repositories still
+ *  require a signed-in account. */
+export type AuthProvider = "local" | "google" | "github" | "guest";
 
 export interface UserDocument extends mongoose.Document {
   email: string;
@@ -34,7 +37,7 @@ const userSchema = new mongoose.Schema<UserDocument>(
     },
     passwordHash: { type: String, default: "" }, // empty for OAuth accounts
     name: { type: String, trim: true, default: "", maxlength: 80 },
-    provider: { type: String, enum: ["local", "google", "github"], default: "local" },
+    provider: { type: String, enum: ["local", "google", "github", "guest"], default: "local" },
     googleId: { type: String, default: null },
     githubId: { type: String, default: null },
     avatarUrl: { type: String, default: null },

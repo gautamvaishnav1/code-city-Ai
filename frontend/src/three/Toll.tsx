@@ -3,6 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { useAuth } from "../lib/auth";
+import { useCity } from "../store/useCity";
 
 const INK = new THREE.Color("#141414");
 const SIGNAL = new THREE.Color("#e30613");
@@ -16,8 +17,28 @@ const SIGNAL = new THREE.Color("#e30613");
  */
 export function TollGate({ x, z, lanes, open }: { x: number; z: number; lanes: number[]; open: boolean }) {
   const token = useAuth((s) => s.token);
+  // anonymous demo sessions hold a token too — the sign must not claim they
+  // are a paid customer, so the account kind decides the wording
+  const provider = useAuth((s) => s.user?.provider);
+  // a mission that was stopped for a missing JWT keeps the barrier down and
+  // flips the sign to the 401 the server would have answered with
+  const jwtBlocked = useCity((s) => !!s.mission?.blocked);
+  const probe = useCity((s) => (s.mission?.probe?.sent ? s.mission.probe : null));
+  const probeStatus = probe?.status ?? null;
   // arms lift with traffic flow; the LAMP + SIGN carry the auth state
   const lifted = open;
+  const verdict = jwtBlocked
+    ? "401 · JWT MISSING"
+    : probeStatus === 401
+      ? // a 401 has two very different meanings — say WHICH one happened
+        probe?.withJwt
+          ? "401 · TOKEN REJECTED"
+          : "401 · NO JWT"
+      : token
+        ? provider === "guest"
+          ? "DEMO ✓"
+          : "PAID ✓"
+        : "GUEST — SIGN IN";
 
   return (
     <group position={[x, 0, z]}>
@@ -72,7 +93,8 @@ export function TollGate({ x, z, lanes, open }: { x: number; z: number; lanes: n
       {/* the price sign */}
       <Html center position={[0, 5.1, -0.4]} distanceFactor={60}>
         <div className="pointer-events-none select-none whitespace-nowrap rounded-none border-[1.5px] border-black-ink bg-paper px-2 py-1 font-mono text-[10px] font-bold text-black-ink shadow-[3px_3px_0_rgba(0,0,0,.45)]">
-          TOLL · <span className="text-signal">JWT</span> {token ? "· PAID ✓" : "· GUEST — SIGN IN"}
+          TOLL · <span className="text-signal">JWT</span> ·{" "}
+          <span className={jwtBlocked || probeStatus === 401 ? "text-signal" : undefined}>{verdict}</span>
         </div>
       </Html>
     </group>

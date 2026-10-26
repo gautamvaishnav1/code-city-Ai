@@ -107,6 +107,46 @@ Set to a verified sender, e.g. `MAIL_FROM=CodeCity <no-reply@your-domain.com>`.
 
 ---
 
+## 4b. SMTP fallback relay (`SMTP_FALLBACK_*`) — recommended on Render
+
+Gmail's SMTP (`Option A`) is frequently **blocked or rate-limited from PaaS hosts such as
+Render** (outbound port 587 is often filtered). When that happens OTP emails silently fail.
+
+Configure a **fallback relay** (Brevo works great and is free up to 300 emails/day). The app
+tries the primary `SMTP_*` first and, **only if that send fails**, automatically retries via
+the fallback — no code change needed, OTP delivery just keeps working.
+
+| Env | Value | Where |
+|---|---|---|
+| `SMTP_FALLBACK_HOST` | `smtp-relay.brevo.com` | fixed (Brevo) |
+| `SMTP_FALLBACK_PORT` | `587` | fixed |
+| `SMTP_FALLBACK_USER` | login email | https://app.brevo.com/settings/keys/api → SMTP & API tab |
+| `SMTP_FALLBACK_PASS` | SMTP key | same page → **Generate new SMTP key** |
+| `MAIL_FALLBACK_FROM` | verified sender | must match a sender verified in Brevo |
+
+**Render setup (Gmail primary + Brevo fallback):**
+
+```ini
+# primary — Gmail (works locally, may be blocked on Render)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=<gmail-app-password>
+
+# fallback — Brevo (takes over automatically when Gmail fails)
+SMTP_FALLBACK_HOST=smtp-relay.brevo.com
+SMTP_FALLBACK_PORT=587
+SMTP_FALLBACK_USER=you@your-domain.com
+SMTP_FALLBACK_PASS=<brevo-smtp-key>
+MAIL_FALLBACK_FROM=CodeCity <no-reply@your-domain.com>
+```
+
+> **Tip:** On Render you can set only the `SMTP_FALLBACK_*` vars and leave `SMTP_*` empty —
+> mail then goes straight to Brevo. If the fallback send itself fails, the error is logged
+> and surfaced to the caller (so the user sees "try again shortly" instead of a silent drop).
+
+---
+
 ## 5. LLM API key (`LLM_API_KEY`) — AI architect & chat
 
 Any OpenAI-compatible endpoint works:
@@ -149,6 +189,11 @@ LLM_API_KEY=sk-...
 SMTP_HOST=...
 SMTP_USER=...
 SMTP_PASS=...
+# optional but recommended on Render — auto-used when the primary SMTP fails
+SMTP_FALLBACK_HOST=smtp-relay.brevo.com
+SMTP_FALLBACK_USER=...
+SMTP_FALLBACK_PASS=...
+MAIL_FALLBACK_FROM=CodeCity <no-reply@your-domain.com>
 ```
 
 - [ ] `JWT_SECRET` changed from placeholder
@@ -156,6 +201,7 @@ SMTP_PASS=...
 - [ ] `PUBLIC_BASE_URL` / `FRONTEND_URL` point at production hosts
 - [ ] OAuth callback URLs updated in Google Cloud Console + GitHub Developer settings
 - [ ] SMTP configured (no `devCode` leaks in responses)
+- [ ] SMTP fallback relay set (Brevo) — keeps OTP delivery alive on Render where Gmail is blocked
 - [ ] MongoDB Atlas user has strong password, IP allowlist tightened
 
 ---

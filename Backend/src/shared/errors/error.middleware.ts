@@ -46,10 +46,14 @@ export function errorHandler(
     });
   }
 
+  // Never leak upstream/internal details to clients in production for 5xx errors.
+  // 4xx details (validation messages, field errors) are safe and useful for clients.
+  const safeDetails = !isProd || statusCode < 500 ? details : undefined;
+
   res.status(statusCode).json({
     success: false,
     message,
-    ...(details !== undefined ? { details } : {}),
+    ...(safeDetails !== undefined ? { details: safeDetails } : {}),
     ...(!isProd && statusCode >= 500 && err instanceof Error ? { stack: err.stack } : {})
   });
 }

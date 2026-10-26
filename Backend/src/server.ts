@@ -1,14 +1,24 @@
 import http from "node:http";
 import { Server } from "socket.io";
 import app from "./app";
-import { env } from "./config/env";
+import { env, isProd } from "./config/env";
 import { logger, } from "./shared/utils/logger";
 import { connectDB, disconnectDB } from "./infrastructure/database/db.connect";
 import { setIO } from "./infrastructure/realtime/io";
 import { registerSocketServer } from "./modules/realtime/socket.server";
+import { cleanupStaleWorkDirs, logCloneToolchain } from "./infrastructure/github/github.service";
 
 async function main(): Promise<void> {
   logger.secretWarning();
+
+  // Report git/tar versions so production logs confirm the clone toolchain is
+  // ready before the first analysis (the git-clone fallback needs git present).
+  await logCloneToolchain();
+
+  // Sweep orphaned repo-download/git-clone temp dirs left behind by any
+  // crashed or restarted process before we start taking on new work.
+  const swept = cleanupStaleWorkDirs();
+  if (swept > 0) logger.info(`Cleaned up ${swept} stale temp work dir(s) from a previous run`);
 
   await connectDB(env.mongoUri);
 
@@ -61,6 +71,15 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("unhandledRejection", (reason) => {
     logger.error("Unhandled rejection", { reason: String(reason) });
+  });
+  // A stray throw outside any request (e.g. a console EPIPE on a closed pipe)
+  // would otherwise hard-crash with no log and no graceful shutdown.
+  process.on("uncaughtException", (err) => {
+    logger.error("Uncaught exception — shutting down", {
+      message: err.message,
+      stack: isProd ? undefined : err.stack
+    });
+    process.exit(1);
   });
 }
 

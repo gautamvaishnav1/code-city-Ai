@@ -4,6 +4,7 @@ import cors from "cors";
 import mongoose from "mongoose";
 import type { NextFunction, Request, Response } from "express";
 import { env } from "./config/env";
+import { logger } from "./shared/utils/logger";
 import { apiLimiter } from "./shared/middleware/rate-limiter.middleware";
 import { sanitizeRequest } from "./shared/middleware/sanitize.middleware";
 import { errorHandler, notFoundHandler } from "./shared/errors/error.middleware";
@@ -17,7 +18,9 @@ import insightRoutes from "./modules/insights/insights.routes";
 
 const app = express();
 
-app.set("trust proxy", 1);
+// Only trust X-Forwarded-For when explicitly behind a proxy (set TRUST_PROXY=1).
+// Hardcoding trust proxy=1 lets any direct client spoof their IP to bypass rate limiters.
+app.set("trust proxy", env.trustProxy);
 app.disable("x-powered-by");
 
 app.use(helmet());
@@ -38,22 +41,29 @@ app.use(express.json({ limit: "1mb" }));
 // ($gt, $where, dotted paths, __proto__) and collapses duplicated query params
 app.use(sanitizeRequest);
 
-// lightweight request logging with duration
+// lightweight request logging with duration — redact sensitive query params
+// so one-time tickets and tokens never land in stdout / log aggregators.
+// Uses the structured logger so access lines are consistent, respect the log
+// level, and reach the SSE tail like every other line.
+const SENSITIVE_QUERY_RE = /([?&](?:ticket|token|code|otp|secret|password|key)=)[^&]+/gi;
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path === "/health") return next();
   const startedAt = Date.now();
   res.on("finish", () => {
-    // eslint-disable-next-line no-console
-    console.log(
-      `${new Date().toISOString()} [HTTP] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - startedAt}ms)`
-    );
+    const safeUrl = req.originalUrl.replace(SENSITIVE_QUERY_RE, "$1***");
+    logger.info("HTTP", {
+      method: req.method,
+      path: safeUrl,
+      status: res.statusCode,
+      ms: Date.now() - startedAt
+    });
   });
   next();
 });
 
-app.use(apiLimiter);
-
 /* ------------------------------- health ------------------------------- */
+// Registered before the rate limiter so orchestrator/LB probes never consume
+// the API rate-limit budget or receive a 429.
 app.get("/health", (_req, res) => {
   res.status(200).json({
     success: true,
@@ -68,6 +78,8 @@ app.get("/health", (_req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+app.use(apiLimiter);
 
 /* ------------------------------- routes ------------------------------- */
 app.use("/api/v1/auth", authRoutes);

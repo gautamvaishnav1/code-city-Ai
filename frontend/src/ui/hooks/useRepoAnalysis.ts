@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch, useAuth } from "../../lib/auth";
+import { apiFetch, beginGuestSession, ensureSession, useAuth } from "../../lib/auth";
 import { architectureToCity } from "../../lib/city";
+import { subscribeAnalysisProgress } from "../../lib/progressSocket";
 import { useCity } from "../../store/useCity";
+import { useUi } from "../../store/useUi";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 90; // ~3 min ceiling
@@ -16,6 +18,9 @@ export function useRepoAnalysis() {
   const patchCity = useCity((s) => s.patch);
   const notify = useCity((s) => s.notify);
   const [busy, setBusy] = useState(false);
+  /** live pipeline progress 0..100 from the backend Socket.IO stream
+      (null = indeterminate — never a fabricated counter) */
+  const [progress, setProgress] = useState<number | null>(null);
   const alive = useRef(true);
   const busyRef = useRef(false);
 
@@ -24,6 +29,28 @@ export function useRepoAnalysis() {
     return () => {
       alive.current = false;
     };
+  }, []);
+
+  /** a build that hit the sign-in gate — resumed automatically once the auth
+   *  modal hands back a live session (no second click, no dead-end toast). */
+  const pendingInput = useRef<string | null>(null);
+
+  // resume the moment a session appears (sign-in / OTP / OAuth all land here)
+  useEffect(() => {
+    return useAuth.subscribe((s, prev) => {
+      if (prev.token || !s.token || !pendingInput.current) return;
+      const input = pendingInput.current;
+      pendingInput.current = null;
+      void analyze(input);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // the modal was dismissed without signing in → forget the queued build
+  useEffect(() => {
+    return useUi.subscribe((s, prev) => {
+      if (prev.authOpen && !s.authOpen && !useAuth.getState().token) pendingInput.current = null;
+    });
   }, []);
 
   const analyze = useCallback(
@@ -37,14 +64,50 @@ export function useRepoAnalysis() {
       }
       busyRef.current = true;
       setBusy(true);
+      let unsubProgress: (() => void) | undefined;
       notify(
         isDemo
           ? "▸ Loading bundled demo project (Beach Resort)…"
           : `▸ Analyzing ${target} …`,
       );
       try {
-        if (!useAuth.getState().token) {
-          throw new Error("sign in first — ⌘K → Sign in / Create account");
+        // a cold tab may still hold only a refresh token — mint the access
+        // token first instead of refusing with "sign in first"
+        if (!useAuth.getState().token) await ensureSession();
+        if (!useAuth.getState().token && !useAuth.getState().refreshToken) {
+          // no session at all. The BUNDLED DEMO never dead-ends on a sign-in
+          // wall: ask the backend for an anonymous guest session (demo:// only
+          // — the API refuses everything else for guests) and carry straight on
+          // with the build. Real repositories keep the sign-in gate, but they
+          // also queue the build, so the moment the session lands the build
+          // starts on its own and nobody has to press BUILD CITY twice.
+          if (isDemo) {
+            try {
+              await beginGuestSession();
+              if (!alive.current) return;
+              notify("👋 Opening the demo as a guest — sign in whenever you like", undefined, "info");
+            } catch {
+              pendingInput.current = target;
+              useUi.setState({ authOpen: true });
+              notify("🔐 Sign in to open the demo — the build starts the moment you're in", undefined, "info");
+              return;
+            }
+          } else {
+            pendingInput.current = target;
+            useUi.setState({ authOpen: true });
+            notify("🔐 Sign in to build this repo — the build starts the moment you're in", undefined, "info");
+            return;
+          }
+        }
+
+        // a guest session is enough for the demo but never for a repository —
+        // swap it for the sign-in dialog (queued, resumes on its own) instead
+        // of letting the backend answer with a raw 403 halfway through a build
+        if (!isDemo && useAuth.getState().user?.provider === "guest") {
+          pendingInput.current = target;
+          useUi.setState({ authOpen: true });
+          notify("🔐 Guest sessions can open the demo only — sign in to analyze this repo", undefined, "info");
+          return;
         }
 
         // create a project for the repo (demo:// → bundled demo, no download)
@@ -72,6 +135,7 @@ export function useRepoAnalysis() {
               if (exJson?.data?.cached && exJson.data.architecture) {
                 if (!alive.current) return;
                 setCity(architectureToCity(exJson.data));
+                patchCity({ guideCta: true });
                 notify(
                   `⚡ ${exJson.data.explanation?.summary ?? `Loaded ${exJson.data.repoInfo?.fullName} from database`}`,
                   undefined,
@@ -106,7 +170,28 @@ export function useRepoAnalysis() {
           throw new Error(startJson.message ?? `HTTP ${startRes.status}`);
         const analysisId: string = startJson.data.analysisId;
 
-        // poll until the pipeline completes (bails instantly on unmount)
+        // REAL progress: join the project room on Socket.IO and listen to the
+        // pipeline's analysis:progress events (step + percent from the backend).
+        // If the socket never connects, progress stays null → honest
+        // indeterminate "BUILDING…" on the button (audit finding 3).
+        let lastStep = "";
+        unsubProgress = subscribeAnalysisProgress({
+          projectId,
+          analysisId,
+          token: useAuth.getState().token ?? "",
+          onProgress: (p) => {
+            if (!alive.current) return;
+            if (typeof p.percent === "number") setProgress(p.percent);
+            if (p.step !== lastStep) {
+              lastStep = p.step;
+              notify(`▸ ${p.message ?? p.step}${typeof p.percent === "number" ? ` — ${p.percent}%` : ""}`);
+            }
+          },
+        });
+
+        // poll until the pipeline completes (bails instantly on unmount).
+        // The status endpoint carries NO percent — completion detection only,
+        // never a fabricated progress number.
         let status = "running";
         for (let i = 0; i < MAX_POLLS && alive.current; i++) {
           await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -115,12 +200,12 @@ export function useRepoAnalysis() {
           const stJson = await stRes.json();
           if (!stRes.ok) throw new Error(stJson.message ?? `HTTP ${stRes.status}`);
           status = stJson.data.status as string;
-          notify(`▸ analyzing… ${stJson.data.progress ?? Math.min(99, i * 4)}%`);
           if (status !== "running") break;
         }
         if (!alive.current) return;
         if (status !== "completed")
           throw new Error(`analysis ${status} — check backend logs`);
+        setProgress(100);
 
         // fetch the validated city architecture
         const archRes = await apiFetch(`/projects/${projectId}/architecture`);
@@ -131,17 +216,24 @@ export function useRepoAnalysis() {
         const files = city.districts.reduce((a, d) => a + d.buildings.length, 0);
         setCity(city);
         // reset UI selection so the city starts with a clean state (no building highlighted)
-        patchCity({ selectedId: null, selectedFn: null });
+        // + surface the post-build "how to improve" CTA in the right rail
+        patchCity({ selectedId: null, selectedFn: null, guideCta: true });
         notify(`🏙 Loaded ${city.project.name} — ${files} buildings`, undefined, "success");
       } catch (e) {
-        if (alive.current) notify(`⚠ ${(e as Error).message}`, undefined, "error");
+        // silent = session ended by the refresh layer — never surface token errors
+        if (alive.current && !(e as { silent?: boolean }).silent)
+          notify(`⚠ ${(e as Error).message}`, undefined, "error");
       } finally {
+        unsubProgress?.();
         busyRef.current = false;
-        if (alive.current) setBusy(false);
+        if (alive.current) {
+          setBusy(false);
+          setProgress(null);
+        }
       }
     },
     [setCity, notify, patchCity],
   );
 
-  return { busy, analyze };
+  return { busy, analyze, progress };
 }

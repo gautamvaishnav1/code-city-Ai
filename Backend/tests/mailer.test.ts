@@ -6,18 +6,23 @@ import {
   type MailOptions
 } from "../src/infrastructure/mailer/mailer.service";
 
-/* nodemailer mock — transporter behavior is swappable per-test via ref */
-const { sendMailRef } = vi.hoisted(() => ({
-  sendMailRef: { current: null as ((opts: Record<string, unknown>) => Promise<unknown>) | null }
+/* nodemailer mock — transporter behavior is swappable per-test via refs */
+const { sendMailRef, sendMailByHostRef } = vi.hoisted(() => ({
+  sendMailRef: { current: null as ((opts: Record<string, unknown>) => Promise<unknown>) | null },
+  sendMailByHostRef: {
+    current: null as ((host: string, opts: Record<string, unknown>) => Promise<unknown>) | null
+  }
 }));
 
 vi.mock("nodemailer", () => ({
   default: {
-    createTransport: vi.fn(() => ({
-      sendMail: (opts: Record<string, unknown>) =>
-        sendMailRef.current
-          ? sendMailRef.current(opts)
-          : Promise.resolve({ messageId: "<default@test>" })
+    createTransport: vi.fn((config: { host: string }) => ({
+      sendMail: (opts: Record<string, unknown>) => {
+        // per-host override lets a test make the primary fail but the fallback succeed
+        if (sendMailByHostRef.current) return sendMailByHostRef.current(config.host, opts);
+        if (sendMailRef.current) return sendMailRef.current(opts);
+        return Promise.resolve({ messageId: `<${config.host}@test>` });
+      }
     }))
   }
 }));
@@ -26,11 +31,19 @@ const mutableEnv = env as unknown as {
   smtpHost: string;
   smtpUser: string;
   smtpPass: string;
+  smtpFallbackHost: string;
+  smtpFallbackUser: string;
+  smtpFallbackPass: string;
+  mailFallbackFrom: string;
 };
 const original = {
   smtpHost: env.smtpHost,
   smtpUser: env.smtpUser,
-  smtpPass: env.smtpPass
+  smtpPass: env.smtpPass,
+  smtpFallbackHost: env.smtpFallbackHost,
+  smtpFallbackUser: env.smtpFallbackUser,
+  smtpFallbackPass: env.smtpFallbackPass,
+  mailFallbackFrom: env.mailFallbackFrom
 };
 
 function setSmtp(host: string) {
@@ -39,14 +52,25 @@ function setSmtp(host: string) {
   mutableEnv.smtpPass = host ? "pass" : "";
 }
 
+function setFallbackSmtp(host: string) {
+  mutableEnv.smtpFallbackHost = host;
+  mutableEnv.smtpFallbackUser = host ? "fallback-user" : "";
+  mutableEnv.smtpFallbackPass = host ? "fallback-pass" : "";
+}
+
 beforeEach(() => {
   sendMailRef.current = null;
+  sendMailByHostRef.current = null;
 });
 
 afterEach(() => {
   mutableEnv.smtpHost = original.smtpHost;
   mutableEnv.smtpUser = original.smtpUser;
   mutableEnv.smtpPass = original.smtpPass;
+  mutableEnv.smtpFallbackHost = original.smtpFallbackHost;
+  mutableEnv.smtpFallbackUser = original.smtpFallbackUser;
+  mutableEnv.smtpFallbackPass = original.smtpFallbackPass;
+  mutableEnv.mailFallbackFrom = original.mailFallbackFrom;
 });
 
 describe("sendMail (dev fallback mode — SMTP unconfigured)", () => {
@@ -106,6 +130,79 @@ describe("sendMail (SMTP configured)", () => {
 
     await expect(sendMail({ to: "r@x.y", subject: "s", text: "t" })).rejects.toThrow(
       /relay denied/i
+    );
+  });
+});
+
+describe("sendMail (fallback relay — e.g. Brevo behind Gmail on Render)", () => {
+  it("retries via the fallback when the primary send fails", async () => {
+    const hostsSeen: string[] = [];
+    sendMailByHostRef.current = async (host) => {
+      hostsSeen.push(host);
+      if (host === "smtp.gmail.com") throw new Error("Connection blocked by host");
+      return { messageId: "<brevo@test>" };
+    };
+    setSmtp("smtp.gmail.com");
+    setFallbackSmtp("smtp-relay.brevo.com");
+
+    const result = await sendMail({ to: "u@example.com", subject: "Verify", text: "code 123456" });
+
+    expect(result).toEqual({ delivered: true });
+    expect(hostsSeen).toEqual(["smtp.gmail.com", "smtp-relay.brevo.com"]);
+  });
+
+  it("uses MAIL_FALLBACK_FROM as the sender when set", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    sendMailByHostRef.current = async (host, opts) => {
+      if (host === "smtp-relay.brevo.com") seen.push(opts);
+      throw new Error("primary down");
+    };
+    setSmtp("smtp.gmail.com");
+    setFallbackSmtp("smtp-relay.brevo.com");
+    mutableEnv.mailFallbackFrom = "CodeCity <no-reply@brevo-verified.com>";
+
+    await expect(sendMail({ to: "a@b.c", subject: "s", text: "t" })).rejects.toThrow();
+    expect(seen[0].from).toBe("CodeCity <no-reply@brevo-verified.com>");
+  });
+
+  it("falls back to MAIL_FROM when MAIL_FALLBACK_FROM is empty", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    sendMailByHostRef.current = async (host, opts) => {
+      if (host === "smtp-relay.brevo.com") seen.push(opts);
+      throw new Error("primary down");
+    };
+    setSmtp("smtp.gmail.com");
+    setFallbackSmtp("smtp-relay.brevo.com");
+    mutableEnv.mailFallbackFrom = "";
+
+    await expect(sendMail({ to: "a@b.c", subject: "s", text: "t" })).rejects.toThrow();
+    expect(seen[0].from).toBe(env.mailFrom);
+  });
+
+  it("sends straight to the fallback when no primary is configured", async () => {
+    const hostsSeen: string[] = [];
+    sendMailByHostRef.current = async (host) => {
+      hostsSeen.push(host);
+      return { messageId: "<brevo@test>" };
+    };
+    setSmtp(""); // no primary at all
+    setFallbackSmtp("smtp-relay.brevo.com");
+
+    const result = await sendMail({ to: "u@example.com", subject: "s", text: "t" });
+
+    expect(result).toEqual({ delivered: true });
+    expect(hostsSeen).toEqual(["smtp-relay.brevo.com"]);
+  });
+
+  it("throws when both the primary and fallback fail", async () => {
+    sendMailByHostRef.current = async () => {
+      throw new Error("both relays down");
+    };
+    setSmtp("smtp.gmail.com");
+    setFallbackSmtp("smtp-relay.brevo.com");
+
+    await expect(sendMail({ to: "r@x.y", subject: "s", text: "t" })).rejects.toThrow(
+      /both relays down/i
     );
   });
 });

@@ -1,4 +1,4 @@
-import type { FileFacts, FileRole } from "./parser.types";
+import type { FileFacts, FileRole, RuntimeSignals, SyntaxFacts } from "./parser.types";
 import { detectFileRole } from "./ast-analyzer";
 
 /**
@@ -121,11 +121,62 @@ export function extractWithFallback(filePath: string, code: string, error: unkno
     authEvidence.add("password hashing call");
   if (/passport\s*\.\s*authenticate/.test(code)) authEvidence.add("passport.authenticate() call");
 
+  // lightweight regex-based syntax detection for fallback files
+  const hasArrow = /=>\s*[{(]|=>\s*[\w$]/.test(code);
+  const hasTemplate = /`[^`]*`/.test(code);
+  const hasDestructure = /\{[^}]*\}\s*=|const\s*\{[^}]*\}/.test(code);
+  const hasSpread = /\.\.\./.test(code);
+  const hasAsyncAwait = /\basync\b|\bawait\b/.test(code);
+  const hasClass = /\bclass\s+[\w$]/.test(code);
+  const hasLetConst = /\b(let|const)\s+/.test(code);
+  const hasModules = /\bimport\s+|\brequire\s*\(|\bmodule\.exports\b|\bexports\./.test(code);
+  const syntax: SyntaxFacts = {
+    hasArrowFunctions: hasArrow,
+    hasTemplateLiterals: hasTemplate,
+    hasDestructuring: hasDestructure,
+    hasSpreadOperator: hasSpread,
+    hasAsyncAwait,
+    hasGenerators: /function\s*\*/.test(code),
+    hasForOf: /for\s*\([^)]*\bof\b/.test(code),
+    hasDefaultParams: /=\s*[^,)]+\)/.test(code),
+    hasClasses: hasClass,
+    hasGettersSetters: /\bget\s+[\w$]+\s*\(|\bset\s+[\w$]+\s*\(/.test(code),
+    hasComputedProps: /\[[\w'"$]+\]\s*:/.test(code),
+    hasLetConst,
+    hasModules,
+    isES6Plus: hasArrow || hasTemplate || hasDestructure || hasSpread || hasAsyncAwait || hasClass || hasLetConst || hasModules
+  };
+
+  const requireCount = (code.match(/\brequire\s*\(/g) ?? []).length;
+  const cjsExportCount = (code.match(/\bmodule\.exports\b|\bexports\.\w+/g) ?? []).length;
+  const awaitCount = (code.match(/\bawait\s+/g) ?? []).length;
+  const processEnvCount = (code.match(/\bprocess\.env\b/g) ?? []).length;
+  const consoleErrCount = (code.match(/\bconsole\.error\s*\(/g) ?? []).length;
+  const consoleWarnCount = (code.match(/\bconsole\.warn\s*\(/g) ?? []).length;
+  const consoleLogCount = (code.match(/\bconsole\.log\s*\(/g) ?? []).length;
+  // rough: count catch blocks with empty or log-only bodies
+  const catchBlocks = (code.match(/\bcatch\s*\([^)]*\)\s*\{/g) ?? []).length;
+  const rethrows = (code.match(/\bcatch\s*\([^)]*\)\s*\{[^}]*\bthrow\b/g) ?? []).length;
+  const swallowedErrors = Math.max(0, catchBlocks - rethrows);
+
+  const signals: RuntimeSignals = {
+    processEnvUsage: processEnvCount,
+    consoleErrorCalls: consoleErrCount,
+    consoleWarnCalls: consoleWarnCount,
+    consoleLogCalls: consoleLogCount,
+    awaitCalls: awaitCount,
+    swallowedErrors,
+    requireCalls: requireCount,
+    cjsExports: cjsExportCount
+  };
+
   return {
     path: normalized,
     lines: code.split("\n").length,
     bytes: Buffer.byteLength(code, "utf8"),
     role: detectFileRole(normalized, /\.(jsx|tsx)$/i.test(normalized)),
+    syntax,
+    signals,
     imports: [...imports.entries()].map(([source, specs]) => ({
       file: normalized,
       source,

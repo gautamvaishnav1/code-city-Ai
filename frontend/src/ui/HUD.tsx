@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Bug, GitBranch, LogOut, Play, Radio, Search, Video, Waves } from "lucide-react";
-import { apiFetch, useAuth } from "../lib/auth";
-import { useCityLayout } from "../lib/city";
+import { useMemo, useState } from "react";
+import { Waves } from "lucide-react";
+import { apiFetch } from "../lib/auth";
+import { allFlows, flowAuth, flowsThrough, useCityLayout } from "../lib/city";
+import { startFlow } from "../lib/flowRunner";
 import { useCity } from "../store/useCity";
 import { pushLog } from "./logFeed";
 import { DraggablePanel } from "./DraggablePanel";
@@ -9,114 +10,48 @@ import { MissionStrip } from "./MissionStrip";
 import { useCityShortcuts } from "./shortcuts";
 import { useAsyncAction } from "./useAsyncAction";
 import { useRepoAnalysis } from "./hooks/useRepoAnalysis";
+import { MainMenu } from "./Mainmenu";
+import { FlowEdgeCard } from "./FlowEdgeCard";
+import { RecentProjects } from "./RecentProjects";
+import { RepoLoader } from "./RepoLoader";
+import { UserChip } from "./UserChip";
 import { AlertStack } from "./panels/AlertStack";
-import { FloatingNotifs } from "./panels/FloatingNotifs";
+import { BottlenecksPanel } from "./panels/BottlenecksPanel";
 import { WeatherPanel } from "./panels/WeatherPanel";
 import { LogPanel } from "./panels/LogPanel";
 import { ImprovementGuide } from "./panels/ImprovementGuide";
-import { ApiWorkflows } from "./panels/ApiWorkflows";
-import { Minimap } from "./panels/Minimap";
+import { RequestFlowButton } from "./panels/ApiWorkflows";
 import { LegendPanel } from "./panels/LegendPanel";
 
-function UserChip() {
-  const user = useAuth((s) => s.user);
-  const signOut = useAuth((s) => s.signOut);
-  if (!user) return null;
+/** one stat tile in the telemetry panel */
+function Stat({ label, value, tone = "signal" }: { label: string; value: string | number; tone?: "signal" | "good" | "warn" | "muted" }) {
+  const color =
+    tone === "good" ? "text-emerald-600" : tone === "warn" ? "text-[#f59e0b]" : tone === "muted" ? "text-black-ink/45" : "text-signal";
   return (
-    <div className="flex items-center gap-2 rounded-none border-[1.5px] border-black-ink bg-paper/95 px-2.5 py-2">
-      <span className="grid h-5 w-5 place-items-center rounded-full bg-black-ink text-[10px] font-bold text-paper">
-        {user.name.slice(0, 1).toUpperCase()}
-      </span>
-      <span className="hidden max-w-[90px] truncate font-mono text-[11px] text-black-ink/75 lg:block">{user.name}</span>
-      <button onClick={signOut} title="Sign out" aria-label="Sign out" className="text-black-ink/45 transition-colors hover:text-signal">
-        <LogOut size={13} />
-      </button>
+    <div className="rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 text-xs">
+      <div className="text-black-ink/60">{label}</div>
+      <div className={`text-lg font-bold ${color}`}>{value}</div>
     </div>
   );
 }
 
-function RepoLoader() {
-  const [q, setQ] = useState("");
-  const { busy, analyze } = useRepoAnalysis();
-
-  // auto-load a repo requested from the landing page hero form
-  useEffect(() => {
-    const pending = localStorage.getItem("cc-pending-repo");
-    if (!pending) return;
-    localStorage.removeItem("cc-pending-repo");
-    const id = window.setTimeout(() => void analyze(pending), 0);
-    return () => clearTimeout(id);
-  }, [analyze]);
-
-  return (
-    <div className="relative flex items-center">
-      <GitBranch size={14} className="absolute left-3 top-3 text-black-ink/55" />
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && void analyze(q)}
-        placeholder="github.com/owner/repo"
-        aria-label="Repository URL"
-        className="w-44 pl-8 pr-2 py-2 rounded-xl bg-paper/95 border-[1.5px] border-black-ink text-sm outline-none focus:border-signal lg:w-56"
-      />
-      <button
-        onClick={() => void analyze(q)}
-        disabled={busy}
-        title={busy ? "Analysis in progress…" : "Analyze the repo and build its city"}
-        className={`ml-1 px-3 py-2 rounded-xl border text-xs font-bold ${
-          busy
-            ? "bg-black-ink/15 border-[1.5px] border-black-ink/40 text-black-ink/50 cursor-wait"
-            : "bg-signal text-paper border-[1.5px] border-black-ink shadow-[3px_3px_0_rgba(20,20,20,.35)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_rgba(20,20,20,.35)] transition-all"
-        }`}
-      >
-        {busy ? "Building…" : "Build City"}
-      </button>
-      <button
-        onClick={() => void analyze("demo://beach-resort")}
-        disabled={busy}
-        title="Analyze the bundled Beach Resort demo project (full-stack MERN, no download)"
-        className="ml-1 px-3 py-2 rounded-xl border-[1.5px] border-black-ink bg-paper/95 text-xs font-bold hover:bg-black-ink hover:text-paper transition-colors disabled:opacity-50"
-      >
-        <Waves size={12} className="mr-1 inline" />
-        Demo
-      </button>
-    </div>
-  );
-}
-
-/* ── REAL latency telemetry — measured from actual API round-trips ── */
-function LatencyButtons() {
-  const ms = useCity((s) => s.apiLatencyMs);
-  const speed = useCity((s) => s.latency);
-  const color = ms == null ? "#94a3b8" : ms < 250 ? "#22c55e" : ms < 900 ? "#eab308" : "#ef4444";
-  return (
-    <div className="flex items-center gap-2 rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 text-xs">
-      <span aria-hidden className="inline-block h-2 w-2 rounded-full" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
-      <span className="font-bold tabular-nums">{ms == null ? "— ms" : `${Math.round(ms)} ms`}</span>
-      <span className="text-black-ink/60">· {speed} traffic</span>
-    </div>
-  );
-}
-
-const TOGGLE_BASE =
-  "rounded-xl border px-2 py-2 text-xs min-h-[36px] lg:px-3 min-w-[36px]";
-const toggleClass = (on: boolean) =>
-  on ? `${TOGGLE_BASE} border-black-ink bg-black-ink text-paper` : `${TOGGLE_BASE} border-[1.5px] border-black-ink/60 bg-paper-deep`;
-
+/**
+ * HUD — after a build the screen is JUST the 3D city plus the ☰ MENU (build,
+ * search, view options, panel toggles all live there) and the REQUEST FLOW
+ * button. Contextual pieces (post-build CTA, incidents, inspector, toasts)
+ * appear on their own; everything else is a closable popup opened from the
+ * menu (✕ hides any panel, menu re-opens it).
+ */
 export function HUD() {
   const layout = useCityLayout();
+  const { busy: building, analyze, progress } = useRepoAnalysis();
   // granular selectors — no whole-store subscription (time ticks etc.
   // must not re-render the whole HUD)
   const projectName = useCity((s) => s.city.project.name);
+  const healthScore = useCity((s) => s.city.healthScore);
+  const city = useCity((s) => s.city);
   const cityEdges = useCity((s) => s.city.edges);
-  const traffic = useCity((s) => s.traffic);
-  const underground = useCity((s) => s.underground);
-  const linksOn = useCity((s) => s.links);
-  const following = useCity((s) => s.following);
-  const showcase = useCity((s) => s.showcase);
-  const failing = useCity((s) => s.failing);
-  const failingId = useCity((s) => s.failingId);
-  const missionActive = useCity((s) => !!s.missionHud);
+  const guideCta = useCity((s) => s.guideCta);
   const notifications = useCity((s) => s.notifications);
   const selectedId = useCity((s) => s.selectedId);
   const selectedFnName = useCity((s) => s.selectedFn);
@@ -124,34 +59,21 @@ export function HUD() {
   const patch = useCity((s) => s.patch);
   const select = useCity((s) => s.select);
   const setFocus = useCity((s) => s.setFocus);
-  const dispatchMission = useCity((s) => s.dispatchMission);
-  const notifyFn = useCity((s) => s.notify);
-  const pushHealth = useCity((s) => s.pushHealth);
 
   useCityShortcuts(true);
 
-  const [q, setQ] = useState("");
-  const [hi, setHi] = useState(0);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [bnOpen, setBnOpen] = useState(false);
   const sel = layout.byId.get(selectedId ?? "");
   const selFn = sel?.functions.find((f) => f.name === selectedFnName);
-  const results = useMemo(
-    () =>
-      q
-        ? layout.buildings.filter((b) => (b.name + b.districtName).toLowerCase().includes(q.toLowerCase())).slice(0, 6)
-        : [],
-    [q, layout],
-  );
-  // highlight stays in bounds when the filter shrinks (derived, no effect)
-  const hiSafe = Math.min(hi, results.length - 1);
+  const hasCity = layout.buildings.length > 0;
   const lines = layout.buildings.reduce((a, b) => a + b.loc, 0);
+  const bnCount = layout.buildings.filter((b) => b.health !== "ok").length;
 
   const pick = (id: string) => {
     const b = layout.byId.get(id);
     if (!b) return;
     select(id);
     setFocus(b.pos[0], b.pos[2]);
-    setQ("");
     pushLog("fe", `inspect ${b.name}`, "info");
   };
 
@@ -163,6 +85,36 @@ export function HUD() {
       calls: cityEdges.filter((e) => e.from === selectedId),
     };
   }, [cityEdges, selectedId]);
+
+  // JWT policy per building — "NO JWT" only when every flow through the
+  // building is public; one protected flow and the badge reads JWT.
+  const flows = useMemo(() => allFlows(city), [city]);
+  const authOf = useMemo(() => {
+    const map = new Map<string, "JWT" | "PUBLIC">();
+    for (const [key, chain] of Object.entries(flows)) {
+      const req = flowAuth(key, city).requiresAuth;
+      for (const id of chain) {
+        if (req) map.set(id, "JWT");
+        else if (!map.has(id)) map.set(id, "PUBLIC");
+      }
+    }
+    return map;
+  }, [flows, city]);
+  const selFlows = useMemo(() => (selectedId ? flowsThrough(city, selectedId) : []), [city, selectedId]);
+
+  const AuthBadge = ({ id }: { id: string }) => {
+    const pub = authOf.get(id) === "PUBLIC";
+    return (
+      <span
+        className={`ml-auto shrink-0 rounded-sm px-1 font-mono text-[8px] font-black ${
+          pub ? "border border-emerald-600 text-emerald-700" : "bg-black-ink text-paper"
+        }`}
+        title={pub ? "Public route — requests reach it with NO Authorization header" : "Behind requireAuth() — needs a valid JWT"}
+      >
+        {pub ? "NO JWT" : "JWT"}
+      </span>
+    );
+  };
 
   // local static explanation (instant, no network)
   const explain = (b: NonNullable<typeof sel>, fn: NonNullable<typeof selFn>) =>
@@ -196,169 +148,125 @@ export function HUD() {
 
   return (
     <div className="absolute inset-0 pointer-events-none text-black-ink font-mono">
-      {/* top bar — wraps on tablet */}
-      <div className="absolute left-0 right-0 top-0 flex flex-wrap items-center gap-2 p-3 pointer-events-auto">
-        <button
-          onClick={() => {
-            location.hash = "";
-          }}
-          title="Back to landing page"
-          className="cursor-pointer rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 font-bold transition-colors hover:text-signal"
-        >
-          🏙 CODECITY AI
-        </button>
-        <div className="max-w-[160px] truncate rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 text-xs md:max-w-none">{projectName}</div>
-        <RepoLoader />
-        <div className="relative order-last w-full sm:order-none sm:w-auto sm:flex-1 sm:max-w-md">
-          <Search size={14} className="absolute left-3 top-3 text-black-ink/55" />
-          <input
-            id="city-search"
-            ref={searchRef}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setHi((i) => Math.min(results.length - 1, i + 1));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setHi((i) => Math.max(0, i - 1));
-              } else if (e.key === "Enter" && results[hiSafe]) {
-                pick(results[hiSafe].id);
-              }
-            }}
-            placeholder="Find a feature… e.g. payment   (press / )"
-            role="combobox"
-            aria-expanded={results.length > 0}
-            aria-controls="city-search-listbox"
-            aria-activedescendant={results[hiSafe] ? `city-opt-${results[hiSafe].id}` : undefined}
-            aria-label="Search buildings"
-            className="w-full rounded-xl border-[1.5px] border-black-ink bg-paper/95 py-2 pl-8 pr-3 text-sm outline-none focus:border-signal"
-          />
-          {results.length > 0 && (
-            <div id="city-search-listbox" role="listbox" aria-label="Matching buildings" className="absolute z-10 mt-1 w-full overflow-hidden rounded-xl border-[1.5px] border-black-ink bg-paper">
-              {results.map((b, i) => (
-                <button
-                  key={b.id}
-                  id={`city-opt-${b.id}`}
-                  role="option"
-                  aria-selected={i === hiSafe}
-                  onMouseEnter={() => setHi(i)}
-                  onClick={() => pick(b.id)}
-                  className={`block w-full px-3 py-2 text-left text-sm ${i === hiSafe ? "bg-black-ink text-paper" : "hover:bg-black-ink/10"}`}
-                >
-                  {b.name} <span className={i === hi ? "text-paper/60" : "text-black-ink/60"}>· {b.districtName}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <UserChip />
-        <div className="flex gap-2">
-          <button onClick={() => patch({ traffic: !traffic })} aria-pressed={traffic} className={toggleClass(traffic)}>
-            <Radio size={12} className="mr-1 inline lg:hidden xl:inline" />
-            <span className="hidden lg:inline">Traffic</span>
-          </button>
-          <button onClick={() => patch({ underground: !underground })} aria-pressed={underground} className={toggleClass(underground)}>
-            <span className="hidden lg:inline">Underground</span>
-            <span className="lg:hidden">Pipes</span>
-          </button>
-          <button onClick={() => patch({ links: !linksOn })} aria-pressed={linksOn} className={toggleClass(linksOn)}>
-            <span>Links</span>
-          </button>
-          <button onClick={() => patch({ following: !following })} aria-pressed={following} className={toggleClass(following)}>
-            <span className="hidden lg:inline">Follow</span>
-            <span className="lg:hidden">Cam</span>
-          </button>
+      {/* FIRST RUN (no city) — just the essentials: logo, build, account */}
+      {!hasCity && (
+        <div className="absolute left-0 right-0 top-0 flex flex-wrap items-center gap-2 p-3 pointer-events-auto">
           <button
-            onClick={() => window.dispatchEvent(new CustomEvent("cc-panels-reset"))}
-            title="Dock all panels back to their default positions"
-            className="rounded-xl border-[1.5px] border-black-ink/60 bg-paper-deep px-2 py-2 text-xs min-h-[36px] lg:px-3"
+            onClick={() => {
+              location.hash = "";
+            }}
+            title="Back to landing page"
+            className="shrink-0 cursor-pointer rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 font-bold transition-colors hover:text-signal"
           >
-            ⟲<span className="hidden lg:inline"> Reset layout</span>
+            🏙<span className="hidden sm:inline"> CODECITY AI</span>
           </button>
+          <RepoLoader busy={building} analyze={analyze} progress={progress} />
+          <UserChip />
         </div>
+      )}
+
+      {/* CITY MODE — the whole chrome is ☰ MENU + REQUEST FLOW, nothing else */}
+      {hasCity && (
+        <div className="pointer-events-auto absolute left-3 top-3 z-50 flex items-start gap-2">
+          <MainMenu busy={building} analyze={analyze} progress={progress} />
+          <RequestFlowButton />
+        </div>
+      )}
+
+      {/* contextual top-right — picked data flow, post-build next step + incidents */}
+      <div className="pointer-events-auto absolute right-3 top-3 z-40 flex w-80 max-w-[calc(100vw-24px)] flex-col gap-2">
+        <FlowEdgeCard />
+        {guideCta && (
+          <div className="relative rounded-xl border-[1.5px] border-signal bg-signal/10 p-3 text-xs shadow-[4px_4px_0_rgba(0,0,0,.35)]">
+            <div className="flex items-start justify-between gap-2">
+              <button
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent("cc-open-guide"));
+                  patch({ guideCta: false });
+                }}
+                className="flex-1 text-left font-bold"
+              >
+                📐 HOW CAN I IMPROVE YOUR SYSTEM?
+                <span className="mt-0.5 block font-normal text-black-ink/70">
+                  The AI architect reads your whole city and writes a prioritized fix list — open the
+                  improvement guide →
+                </span>
+              </button>
+              <button
+                onClick={() => patch({ guideCta: false })}
+                aria-label="Dismiss improvement suggestion"
+                className="shrink-0 text-black-ink/45 transition-colors hover:text-signal"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+        <AlertStack />
       </div>
 
-      {/* telemetry */}
-      <DraggablePanel id="telemetry" className="absolute left-3 top-16 pointer-events-auto sm:max-lg:top-28" resizable={false}>
-        <div className="grid gap-2 max-sm:grid-cols-4 max-sm:gap-1">
-          {(
-            [
-              ["FILES", layout.buildings.length],
-              ["LINES", lines],
-              ["DISTRICTS", layout.districts.length],
-              ["BOTTLENECKS", layout.buildings.filter((b) => b.health !== "ok").length],
-            ] as [string, string | number][]
-          ).map(([k, v]) => (
-            <div key={k} className="rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 text-xs">
-              <div className="text-black-ink/60">{k}</div>
-              <div className="text-lg font-bold text-signal">{v}</div>
-            </div>
-          ))}
+      {/* telemetry — ☰ → Panels → Telemetry stats */}
+      <DraggablePanel id="telemetry" className="absolute left-3 top-32 pointer-events-auto lg:top-16" resizable={false}>
+        {hasCity && (
+          <div data-drag className="mb-2 max-w-[240px] truncate font-mono text-[11px] text-black-ink/70" title={projectName}>
+            {projectName}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" data-nodrag>
+          <Stat label="FILES" value={layout.buildings.length} />
+          <Stat label="LINES" value={lines} />
+          <Stat label="DISTRICTS" value={layout.districts.length} />
+          <Stat
+            label="HEALTH"
+            value={healthScore ?? "—"}
+            tone={healthScore == null ? "muted" : healthScore >= 80 ? "good" : healthScore >= 60 ? "warn" : "signal"}
+          />
+          <button
+            onClick={() => setBnOpen((o) => !o)}
+            aria-expanded={bnOpen}
+            aria-controls="cc-bottlenecks"
+            title={bnCount > 0 ? "Show which buildings are bottlenecks" : "No bottlenecks flagged"}
+            className={`rounded-xl border-[1.5px] px-3 py-2 text-left text-xs transition-colors ${
+              bnCount > 0 ? "border-signal bg-signal/5 hover:bg-signal/15" : "border-black-ink bg-paper/95 hover:border-emerald-600"
+            } ${bnOpen ? "ring-1 ring-black-ink" : ""}`}
+          >
+            <div className="text-black-ink/60">BOTTLENECKS</div>
+            <div className={`text-lg font-bold ${bnCount > 0 ? "text-signal" : "text-emerald-600"}`}>{bnCount}</div>
+          </button>
         </div>
+        {bnOpen && <BottlenecksPanel onClose={() => setBnOpen(false)} />}
       </DraggablePanel>
 
-      {/* hero controls — on mobile they lift above the mission strip while a
-          courier is running so the two can never overlap */}
-      <div
-        className={`absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 pointer-events-auto ${
-          missionActive ? "max-md:bottom-32" : "max-md:bottom-24"
-        }`}
-      >
-        <LatencyButtons />
-        <button
-          onClick={() => {
-            patch({ traffic: true, showcase: false });
-            select(null);
-            dispatchMission("login"); // courier car w/ floating info cards + cine cam
-            notifyFn("🚗 POST /api/v1/auth/login dispatched — courier en route");
-            pushLog("fe", "RUN ▸ courier dispatched · POST /api/v1/auth/login", "info");
-          }}
-          id="cc-run-btn"
-          className="rounded-xl border-[1.5px] border-black-ink bg-black-ink px-3 py-2 text-sm font-bold text-paper shadow-[4px_4px_0_rgba(20,20,20,.35)] transition-all hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0_rgba(20,20,20,.35)] md:px-5 md:py-3"
-        >
-          <Play size={14} className="mr-1 inline" />
-          RUN LOGIN
-        </button>
-        <button
-          onClick={() => {
-            const next = !showcase;
-            patch({ showcase: next, following: next ? false : following });
-            notifyFn(next ? "🎬 Showcase orbit — press O or drag to exit" : "Showcase off");
-          }}
-          title="Cinematic showcase orbit (O)"
-          className={`misreg rounded-xl border-[1.5px] px-3 py-2 text-xs font-bold md:py-3 ${showcase ? "border-black-ink bg-black-ink text-paper" : "border-black-ink bg-paper-deep text-black-ink/80"}`}
-        >
-          <Video size={12} className="mr-1 inline" />
-          <span className="hidden sm:inline"> SHOWCASE</span>
-        </button>
-        <button
-          onClick={() => {
-            const next = !failing;
-            patch({ failing: next });
-            if (next) {
-              const failB = layout.byId.get(failingId ?? "") ?? layout.byId.get("be-payctrl");
-              notifyFn("❌ Payment pipeline failed — 500", failB?.id, "error");
-              if (failB) {
-                pushHealth({ buildingId: failB.id, name: failB.name, kind: "error", detail: "payment POST → 500 · circuit open" });
-                pushLog("fe", `FAIL ▸ ${failB.name} returns 500`, "error");
-                pushLog("be", `[http] POST /api/v1/payments -> 500 (circuit open at ${failB.name})`, "error");
-              }
-            }
-          }}
-          id="cc-fail-btn"
-          className="misreg rounded-xl border-[1.5px] border-black-ink bg-signal px-3 py-2 text-xs font-bold text-paper md:py-3"
-        >
-          <Bug size={12} className="mr-1 inline" />
-          FAIL PAYMENT
-        </button>
-      </div>
+      {/* first-run empty state — no fake preloaded city, just clear guidance */}
+      {!building && !hasCity && (
+        <div className="absolute inset-x-0 top-1/2 z-20 -translate-y-1/2 px-4">
+          <div className="pointer-events-auto mx-auto max-w-md rounded-xl border-[1.5px] border-black-ink bg-paper/95 p-5 text-center shadow-[6px_6px_0_rgba(0,0,0,.35)]">
+            <div className="text-3xl">🏙</div>
+            <div className="mt-1 font-bold">No city yet</div>
+            <p className="mt-2 text-xs leading-relaxed text-black-ink/70">
+              Paste a <b>github.com/owner/repo</b> URL in the top bar and press <b>BUILD CITY</b> — CodeCity
+              downloads the repo, reads every file and builds its living 3D twin.
+            </p>
+            <button
+              onClick={() => void analyze("demo://beach-resort")}
+              disabled={building}
+              title="Analyze the bundled Beach Resort demo project (full-stack MERN, no download)"
+              className="mt-3 min-h-[36px] rounded-xl border-[1.5px] border-black-ink bg-paper-deep px-3 py-2 text-xs font-bold transition-colors hover:bg-black-ink hover:text-paper disabled:opacity-50"
+            >
+              <Waves size={12} className="mr-1 inline" />
+              or explore the Beach Resort demo →
+            </button>
+            <div className="mt-4 border-t border-black-ink/20 pt-3 text-left">
+              <div className="caption-caps mb-1.5 font-bold text-black-ink/55">Your previous projects</div>
+              <RecentProjects />
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* notifications bottom-right — capped at 3 so they can never bury the
-          rail/panel content; anything older collapses into a +N chip */}
+      {/* notifications bottom-right — capped at 3, ✕ (panel) hides them */}
       {notifications.length > 0 && (
-        <DraggablePanel id="notifs" className="pointer-events-auto absolute bottom-4 right-3 z-30 max-md:bottom-40 max-md:left-3 max-md:right-3" resizable={false}>
+        <DraggablePanel id="notifs" className="pointer-events-auto absolute bottom-4 right-3 z-30 max-md:bottom-44 max-md:left-3 max-md:right-3" resizable={false}>
           <div className="grid w-72 gap-2 max-md:w-auto">
             {(() => {
               const shown = notifications.slice(-3);
@@ -391,113 +299,163 @@ export function HUD() {
         </DraggablePanel>
       )}
 
-      {/* right rail — alerts, inspector, guide and atmosphere stack in one flow
-          column so they can never overlap regardless of alert count */}
-      <DraggablePanel id="rail" className="pointer-events-none absolute right-3 top-16 z-30 max-md:left-3 max-md:right-3" resizable={false}>
-        <div className="flex max-h-[calc(100vh-160px)] w-80 max-w-[calc(100vw-24px)] flex-col items-stretch gap-2 overflow-y-auto max-md:w-auto">
-          <AlertStack />
-          {/* inspector */}
-          {sel && conn && (
-            <div className="z-20 max-h-[62vh] w-full overflow-auto rounded-xl border-[1.5px] border-black-ink bg-paper/97 p-4 text-sm pointer-events-auto max-md:max-h-[46vh]">
-              <div className="flex justify-between items-start">
-                <div>
-                  <div className="font-bold text-signal">{sel.name}</div>
-                  <div className="text-xs text-black-ink/65">
-                    {sel.districtName} · {sel.kind} · {sel.loc} LOC ·{" "}
-                    <span className={sel.health === "ok" ? "text-black-ink" : "text-signal"}>{sel.health}</span>
-                  </div>
-                </div>
-                <button onClick={() => select(null)} aria-label="Close inspector" className="text-black-ink/45 hover:text-black-ink">
-                  ✕
-                </button>
-              </div>
-
-              {/* CONNECTIONS */}
-              <div className="mt-3 text-xs font-bold text-black-ink/65">CONNECTIONS</div>
-              <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
-                <div className="rounded-lg border border-black-ink/40 bg-paper-deep p-2">
-                  <div className="mb-1 font-bold">◀ CALLERS ({conn.callers.length})</div>
-                  {conn.callers.map((e) => (
-                    <button key={e.from + e.to} onClick={() => pick(e.from)} className="block w-full truncate text-left underline decoration-dotted hover:text-signal">
-                      {layout.byId.get(e.from)?.name ?? e.from}
-                    </button>
-                  ))}
-                  {conn.callers.length === 0 && <span className="text-black-ink/60">client requests only</span>}
-                </div>
-                <div className="rounded-lg border border-black-ink/40 bg-paper-deep p-2">
-                  <div className="mb-1 font-bold">CALLS ({conn.calls.length}) ▶</div>
-                  {conn.calls.map((e) => (
-                    <button key={e.from + e.to} onClick={() => pick(e.to)} className="block w-full truncate text-left underline decoration-dotted hover:text-signal">
-                      {layout.byId.get(e.to)?.name ?? e.to}
-                    </button>
-                  ))}
-                  {conn.calls.length === 0 && <span className="text-black-ink/60">nothing downstream</span>}
+      {/* inspector — contextual popup, only while a building is selected */}
+      {sel && conn && (
+        <DraggablePanel
+          id="inspector"
+          className="pointer-events-auto fixed right-3 top-1/2 z-40 w-80 max-w-[calc(100vw-24px)] -translate-y-1/2"
+          resizable={false}
+        >
+          <div className="max-h-[72vh] w-full overflow-auto rounded-xl border-[1.5px] border-black-ink bg-paper/97 p-4 text-sm shadow-[4px_4px_0_rgba(0,0,0,.3)]">
+            <div data-drag className="flex touch-none justify-between items-start">
+              <div>
+                <div className="font-bold text-signal">{sel.name}</div>
+                <div className="text-xs text-black-ink/65">
+                  {sel.districtName} · {sel.kind} · {sel.loc} LOC
+                  {sel.complexity != null ? ` · cx ${sel.complexity}/100` : ""} ·{" "}
+                  <span className={sel.health === "ok" ? "text-black-ink" : "text-signal"}>{sel.health}</span>
                 </div>
               </div>
-
-              <div className="mt-3 text-xs font-bold text-black-ink/65">FUNCTIONS</div>
-              {sel.functions.length === 0 && <div className="text-xs text-black-ink/60">none extracted</div>}
-              {sel.functions.map((f) => (
-                <button
-                  key={f.name}
-                  onClick={() => select(sel.id, f.name)}
-                  className={`mt-1 block w-full rounded border px-2 py-1 text-left text-xs ${
-                    selectedFnName === f.name ? "border-signal bg-signal/10" : "border-black-ink/40"
-                  }`}
-                >
-                  {f.name}({f.args})
-                </button>
-              ))}
-              {selFn && (
-                <div className="mt-3 rounded-lg border-[1.5px] border-black-ink bg-paper-deep p-3 text-xs">
-                  <div className="mb-1 font-bold text-signal">WHAT THIS DOES</div>
-                  {explain(sel, selFn)}
-                </div>
-              )}
-
-              {/* AI GUIDE */}
-              <div className="mt-3 rounded-lg border-[1.5px] border-black-ink bg-black-ink p-3 text-xs text-paper">
-                <div className="mb-1 caption-caps flex items-center justify-between font-bold">
-                  <span className="text-signal">AI GUIDE — DEEP ANALYSIS</span>
-                  <button
-                    onClick={() => void ai.run(sel)}
-                    disabled={ai.busy}
-                    className="rounded border border-paper/40 px-2 py-0.5 text-[10px] font-bold text-paper hover:border-signal hover:text-signal disabled:opacity-50"
-                  >
-                    {ai.busy ? "THINKING…" : "ANALYZE"}
-                  </button>
-                </div>
-                {!ai.text && !ai.busy && (
-                  <p className="text-paper/60">
-                    Ask the AI about “{sel.name}”: what it does, how it connects, hidden risks and better patterns.
-                  </p>
-                )}
-                {ai.busy && (
-                  <p className="animate-pulse text-paper/60">
-                    Scanning {sel.name}, its {(conn.callers.length ?? 0) + (conn.calls.length ?? 0)} links and district context…
-                  </p>
-                )}
-                {ai.text && <p className="whitespace-pre-wrap leading-relaxed text-paper/90">{ai.text}</p>}
-              </div>
-
-              {/* improvement guide shortcut */}
-              <button
-                onClick={() => window.dispatchEvent(new CustomEvent("cc-open-guide"))}
-                className="mt-2 block w-full rounded-lg border-[1.5px] border-black-ink bg-paper-deep px-3 py-2 text-left text-xs font-bold hover:border-signal"
-              >
-                📐 Open full IMPROVEMENT GUIDE →
+              <button onClick={() => select(null)} aria-label="Close inspector" className="text-black-ink/45 hover:text-black-ink">
+                ✕
               </button>
             </div>
-          )}
-          <ImprovementGuide />
-          <ApiWorkflows />
-          <WeatherPanel />
-        </div>
-      </DraggablePanel>
+
+            {/* CONNECTIONS */}
+            <div className="mt-3 text-xs font-bold text-black-ink/65">CONNECTIONS</div>
+            <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded-lg border border-black-ink/40 bg-paper-deep p-2">
+                <div className="mb-1 font-bold">◀ CALLERS ({conn.callers.length})</div>
+                {conn.callers.map((e) => (
+                  <button key={e.from + e.to} onClick={() => pick(e.from)} className="flex w-full items-center gap-1 text-left">
+                    <span className="min-w-0 truncate underline decoration-dotted hover:text-signal">
+                      {layout.byId.get(e.from)?.name ?? e.from}
+                    </span>
+                    <AuthBadge id={e.from} />
+                  </button>
+                ))}
+                {conn.callers.length === 0 && <span className="text-black-ink/60">client requests only</span>}
+              </div>
+              <div className="rounded-lg border border-black-ink/40 bg-paper-deep p-2">
+                <div className="mb-1 font-bold">CALLS ({conn.calls.length}) ▶</div>
+                {conn.calls.map((e) => (
+                  <button key={e.from + e.to} onClick={() => pick(e.to)} className="flex w-full items-center gap-1 text-left">
+                    <span className="min-w-0 truncate underline decoration-dotted hover:text-signal">
+                      {layout.byId.get(e.to)?.name ?? e.to}
+                    </span>
+                    <AuthBadge id={e.to} />
+                  </button>
+                ))}
+                {conn.calls.length === 0 && <span className="text-black-ink/60">nothing downstream</span>}
+              </div>
+            </div>
+
+            {/* REQUEST FLOWS that pass through this building */}
+            <div className="mt-3 text-xs font-bold text-black-ink/65">REQUEST FLOWS VIA THIS BUILDING</div>
+            {selFlows.length === 0 && (
+              <div className="text-xs text-black-ink/60">none — no API path runs through it</div>
+            )}
+            {selFlows.map((key) => {
+              const info = flowAuth(key, city);
+              const pub = !info.requiresAuth;
+              return (
+                <div key={key} className="mt-1 flex items-center gap-1.5 rounded border border-black-ink/40 bg-paper-deep px-2 py-1 text-[11px]">
+                  <span className="shrink-0 rounded-sm bg-black-ink px-1 py-0.5 font-mono text-[8px] font-black text-paper">
+                    {info.method}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate" title={info.path || `${key} — URL not recoverable by static analysis`}>
+                    {info.path || `${info.label} · no URL`}
+                  </span>
+                  <span
+                    className={`shrink-0 rounded-sm px-1 font-mono text-[8px] font-black ${
+                      pub ? "border border-emerald-600 text-emerald-700" : "bg-black-ink text-paper"
+                    }`}
+                    title={pub ? "Public route — the request goes out with NO Authorization header" : "Behind requireAuth() — needs a valid JWT"}
+                  >
+                    {pub ? "NO JWT" : "JWT"}
+                  </span>
+                  <button
+                    onClick={() => startFlow(key, city)}
+                    title={
+                      pub
+                        ? "Run this request with NO JWT — the car drives the whole road"
+                        : info.path
+                          ? "Run this request — the car stops at the toll if you're not signed in. Open REQUEST FLOW (top bar) to send it either way: with or without the JWT"
+                          : "Trace the chain — no URL recovered, so no HTTP call is sent"
+                    }
+                    className="shrink-0 rounded border border-black-ink px-1.5 py-0.5 font-mono text-[9px] font-bold hover:bg-signal hover:text-paper"
+                  >
+                    ▶
+                  </button>
+                </div>
+              );
+            })}
+
+            <div className="mt-3 text-xs font-bold text-black-ink/65">FUNCTIONS</div>
+            {sel.functions.length === 0 && <div className="text-xs text-black-ink/60">none extracted</div>}
+            {sel.functions.map((f) => (
+              <button
+                key={f.name}
+                onClick={() => select(sel.id, f.name)}
+                className={`mt-1 block w-full rounded border px-2 py-1 text-left text-xs ${
+                  selectedFnName === f.name ? "border-signal bg-signal/10" : "border-black-ink/40"
+                }`}
+              >
+                {f.name}({f.args})
+              </button>
+            ))}
+            {selFn && (
+              <div className="mt-3 rounded-lg border-[1.5px] border-black-ink bg-paper-deep p-3 text-xs">
+                <div className="mb-1 font-bold text-signal">WHAT THIS DOES</div>
+                {explain(sel, selFn)}
+              </div>
+            )}
+
+            {/* AI GUIDE */}
+            <div className="mt-3 rounded-lg border-[1.5px] border-black-ink bg-black-ink p-3 text-xs text-paper">
+              <div className="mb-1 caption-caps flex items-center justify-between font-bold">
+                <span className="text-signal">AI GUIDE — DEEP ANALYSIS</span>
+                <button
+                  onClick={() => void ai.run(sel)}
+                  disabled={ai.busy}
+                  className="rounded border border-paper/40 px-2 py-0.5 text-[10px] font-bold text-paper hover:border-signal hover:text-signal disabled:opacity-50"
+                >
+                  {ai.busy ? "THINKING…" : "ANALYZE"}
+                </button>
+              </div>
+              {!ai.text && !ai.busy && (
+                <p className="text-paper/60">
+                  Ask the AI about “{sel.name}”: what it does, how it connects, hidden risks and better patterns.
+                </p>
+              )}
+              {ai.busy && (
+                <p className="animate-pulse text-paper/60">
+                  Scanning {sel.name}, its {(conn.callers.length ?? 0) + (conn.calls.length ?? 0)} links and district context…
+                </p>
+              )}
+              {ai.text && <p className="whitespace-pre-wrap leading-relaxed text-paper/90">{ai.text}</p>}
+            </div>
+
+            {/* improvement guide shortcut */}
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("cc-open-guide"))}
+              className="mt-2 block w-full rounded-lg border-[1.5px] border-black-ink bg-paper-deep px-3 py-2 text-left text-xs font-bold hover:border-signal"
+            >
+              📐 Open full IMPROVEMENT GUIDE →
+            </button>
+          </div>
+        </DraggablePanel>
+      )}
+
+      {/* menu-opened panels — each hides itself until re-opened from the menu */}
+      <ImprovementGuide />
+      <WeatherPanel />
       <LegendPanel />
-      <Minimap />
       <LogPanel />
-      <FloatingNotifs />
+
+      {/* NOTE: FloatingNotifs is a drei <Html> and mounts INSIDE the Canvas
+          (CityScene) — rendering it here would throw "Hooks can only be used
+          within the Canvas component" the moment a building is selected. */}
       <MissionStrip />
     </div>
   );

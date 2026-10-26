@@ -8,7 +8,7 @@ import {
   githubAuthorizeUrl,
   googleAuthorizeUrl
 } from "./oauth.service";
-import { env } from "../../config/env";
+import { env, isProd } from "../../config/env";
 
 /* ------------------------- local register + OTP ------------------------- */
 
@@ -37,22 +37,85 @@ export const login = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
-/* ------------------------- refresh + logout ------------------------------ */
-
-/** POST /api/v1/auth/refresh — rotates the refresh token, returns a new pair. */
-export const refresh = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body as { refreshToken: string };
-  const data = await authService.rotateRefreshToken(refreshToken);
-  res.status(200).json({
-    success: true,
-    data: { user: data.user, token: data.accessToken, refreshToken: data.refreshToken }
-  });
+/** POST /api/v1/auth/guest — anonymous session for the bundled demo, so
+ *  "explore the demo" never dead-ends on a sign-in wall. The token carries
+ *  `guest: true`, which the API maps to demo:// repositories only. */
+export const guest = asyncHandler(async (_req, res) => {
+  const { user, accessToken, refreshToken } = await authService.createGuestSession();
+  res.status(200).json({ success: true, data: { user, token: accessToken, refreshToken } });
 });
 
-/** POST /api/v1/auth/logout — revokes the presented refresh token. */
+/* ------------------------- refresh + logout ------------------------------ */
+
+/** httpOnly cookie carrying the refresh token for OAuth redirect users —
+ *  the redirect URL itself never contains it. Path-scoped to the auth routes. */
+const REFRESH_COOKIE = "cc_rt";
+const REFRESH_COOKIE_PATH = "/api/v1/auth";
+
+function readCookieValue(req: Request, name: string): string | null {
+  const raw = (req.headers.cookie ?? "")
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${name}=`));
+  return raw ? decodeURIComponent(raw.slice(name.length + 1)) : null;
+}
+
+function setRefreshCookie(res: Response, token: string): void {
+  const parts = [
+    `${REFRESH_COOKIE}=${encodeURIComponent(token)}`,
+    `Path=${REFRESH_COOKIE_PATH}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${Math.floor(env.refreshTokenTtlMs / 1000)}`
+  ];
+  if (isProd) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearRefreshCookie(res: Response): void {
+  const parts = [
+    `${REFRESH_COOKIE}=`,
+    `Path=${REFRESH_COOKIE_PATH}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0"
+  ];
+  if (isProd) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+/** POST /api/v1/auth/refresh — rotates the refresh token, returns a new pair.
+ *  Accepts the token in the body (password/OTP sessions) or the httpOnly
+ *  cookie (OAuth redirect sessions); on success the cookie is re-set with the
+ *  rotated token so the OAuth flow keeps working across rotations. */
+export const refresh = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body as { refreshToken?: string };
+  const presented = refreshToken || readCookieValue(req, REFRESH_COOKIE);
+  if (!presented) {
+    return res.status(400).json({ success: false, message: "Refresh token is required" });
+  }
+  try {
+    const data = await authService.rotateRefreshToken(presented);
+    setRefreshCookie(res, data.refreshToken);
+    res.status(200).json({
+      success: true,
+      data: { user: data.user, token: data.accessToken, refreshToken: data.refreshToken }
+    });
+  } catch (err) {
+    clearRefreshCookie(res); // stale or rejected — don't keep replaying it
+    throw err;
+  }
+});
+
+/** POST /api/v1/auth/logout — revokes the presented refresh token (and the
+ *  cookie copy if different). Idempotent. */
 export const logout = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body as { refreshToken?: string };
-  if (refreshToken) await authService.revokeRefreshToken(refreshToken);
+  const cookieRt = readCookieValue(req, REFRESH_COOKIE);
+  const presented = refreshToken || cookieRt;
+  if (presented) await authService.revokeRefreshToken(presented);
+  if (cookieRt && cookieRt !== presented) await authService.revokeRefreshToken(cookieRt);
+  clearRefreshCookie(res);
   res.status(200).json({ success: true, message: "Logged out." });
 });
 
@@ -117,9 +180,10 @@ async function finishOAuth(
   }
   try {
     const profile = await exchangeCodeForProfile(provider, code);
-    const { user, accessToken } = await authService.loginOrCreateFromOAuth(provider, profile);
-    // NOTE: refresh token intentionally NOT put in the URL — redirect flows
-    // can adopt it later via an httpOnly cookie or the SPA POST endpoints.
+    const { user, accessToken, refreshToken } = await authService.loginOrCreateFromOAuth(provider, profile);
+    // refresh token travels as an httpOnly cookie (Path=/api/v1/auth) —
+    // never in the redirect URL.
+    setRefreshCookie(res, refreshToken);
     const params = new URLSearchParams({ token: accessToken, email: user.email, name: user.name });
     res.redirect(`${env.frontendUrl}/auth/success?${params.toString()}`);
   } catch (err) {

@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   register,
   login,
+  guest,
   refresh,
   logout,
   me,
@@ -38,9 +39,12 @@ const router = Router();
 
 router.post("/register", authLimiter, validate({ body: registerSchema }), register);
 router.post("/login", authLimiter, validate({ body: loginSchema }), login);
+// anonymous demo session — no body, strictly rate limited (it mints an account)
+router.post("/guest", authLimiter, guest);
 
-// token lifecycle — rotation endpoint gets its own tight limit
-router.post("/refresh", refreshTokenLimiter, validate({ body: refreshTokenSchema }), refresh);
+// token lifecycle — rotation endpoint gets its own tight limit.
+// body token optional: OAuth redirect sessions authenticate via the cc_rt cookie.
+router.post("/refresh", refreshTokenLimiter, validate({ body: refreshTokenSchema.partial() }), refresh);
 router.post("/logout", validate({ body: refreshTokenSchema.partial() }), logout);
 
 // OTP flows — even tighter limit than login

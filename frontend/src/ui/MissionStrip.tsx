@@ -9,6 +9,7 @@ const VERB_COLOR: Record<string, string> = {
   verify: "#7c3aed",
   query: "#059669",
   done: "#16a34a",
+  deny: "#dc2626",
 };
 
 /**

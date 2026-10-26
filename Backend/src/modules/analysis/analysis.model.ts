@@ -74,10 +74,8 @@ const analysisSchema = new mongoose.Schema<AnalysisDocument>(
   { timestamps: true }
 );
 
-// powers POST /repos/explain — latest completed analysis per repository
-// analysisSchema.index({ "repoInfo.fullName": 1, status: 1, createdAt: -1 });
+// Fast repo-URL cache lookups (see startAnalysis in analysis.pipeline.ts
+// and explainRepo in repo-explain.service.ts)
+analysisSchema.index({ "repoInfo.fullName": 1, status: 1, createdAt: -1 });
 
 export const AnalysisModel = mongoose.model<AnalysisDocument>("Analysis", analysisSchema);
-
-// Fast repo-URL cache lookups (see startAnalysis in analysis.pipeline.ts)
-analysisSchema.index({ "repoInfo.fullName": 1, status: 1, createdAt: -1 });

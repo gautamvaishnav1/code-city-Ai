@@ -3,7 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { Edges, Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { LaidBuilding, LaidDistrict } from "../lib/layout";
-import { STACK_ACCENT } from "../lib/layout";
+import { FOOTPRINT, STACK_ACCENT } from "../lib/layout";
 import type { Kind, Stack } from "../types";
 import { useCity } from "../store/useCity";
 import { ENV } from "./env";
@@ -22,10 +22,9 @@ const STYLE: Record<Kind, { base: string; style: "concrete" | "brick" | "glass" 
   model: { base: "#46505c", style: "metal", lit: 0.4 },
   api: { base: "#2c4a68", style: "glass", lit: 0.75 },
 };
-const FOOTPRINT: Record<Kind, number> = {
-  page: 4.2, component: 4.2, context: 4.6, route: 3.6, controller: 5,
-  service: 5, middleware: 3.6, model: 6.4, api: 3,
-};
+// lot sizes live in lib/layout.ts (FOOTPRINT) — one source of truth for the
+// renderer AND the grid/clearance maths, so a building can never be wider
+// than the lot it stands on.
 
 // ─── module-level shared materials (built once per page load) ───────────────
 const SIDEWALK = sidewalkTexture();
@@ -112,8 +111,12 @@ function GltfBuilding({ url, h, fp }: { url: string; h: number; fp: number }) {
 
 export function District({ d }: { d: LaidDistrict }) {
   const isDb = d.stack === "database";
-  // slab now hugs the content-fitted ring so big districts keep their ground
-  const slab = useMemo((): [number, number] => (isDb ? [46, 14] : [d.ringR * 2 + 5, d.ringD * 2 + 5]), [isDb, d.ringR, d.ringD]);
+  // plinth size comes from the layout's slab pass (derived from the FINAL
+  // building positions) so it can never swallow a road — see lib/layout.ts
+  const slab = d.slab ?? [Math.max(2, (d.ringR - 1.25) * 2), Math.max(2, (d.ringD - 1.25) * 2)];
+  // the pad, already carved around every road that crosses the district
+  // (the trunk road used to run straight through the backend plinth)
+  const pieces = d.slabs ?? [[-slab[0] / 2, -slab[1] / 2, slab[0], slab[1]] as [number, number, number, number]];
   const labelY = isDb ? 3 : 12;
   const accent = STACK_ACCENT[d.stack];
   const trimMat = useMemo(() => {
@@ -138,26 +141,30 @@ export function District({ d }: { d: LaidDistrict }) {
 
   return (
     <group position={[d.center[0], 0, d.center[1]]}>
-      <mesh position={[0, 0.25, 0]} receiveShadow material={plinthTint(d.stack)}>
-        <boxGeometry args={[slab[0], 0.5, slab[1]]} />
-      </mesh>
-      {/* identity trim — a thin glow strip around the slab's top edge */}
-      {!isDb && (
-        <group position={[0, 0.52, 0]}>
-          <mesh position={[0, 0, -slab[1] / 2 + 0.15]} material={trimMat}>
-            <boxGeometry args={[slab[0], 0.12, 0.3]} />
+      {pieces.map(([px, pz, pw, pd], i) => (
+        <group key={i}>
+          <mesh position={[px + pw / 2, 0.25, pz + pd / 2]} receiveShadow material={plinthTint(d.stack)}>
+            <boxGeometry args={[pw, 0.5, pd]} />
           </mesh>
-          <mesh position={[0, 0, slab[1] / 2 - 0.15]} material={trimMat}>
-            <boxGeometry args={[slab[0], 0.12, 0.3]} />
-          </mesh>
-          <mesh position={[-slab[0] / 2 + 0.15, 0, 0]} material={trimMat}>
-            <boxGeometry args={[0.3, 0.12, slab[1]]} />
-          </mesh>
-          <mesh position={[slab[0] / 2 - 0.15, 0, 0]} material={trimMat}>
-            <boxGeometry args={[0.3, 0.12, slab[1]]} />
-          </mesh>
+          {/* identity trim — a thin glow strip around each pad's top edge */}
+          {!isDb && (
+            <group position={[0, 0.52, 0]}>
+              <mesh position={[px + pw / 2, 0, pz + 0.15]} material={trimMat}>
+                <boxGeometry args={[pw, 0.12, 0.3]} />
+              </mesh>
+              <mesh position={[px + pw / 2, 0, pz + pd - 0.15]} material={trimMat}>
+                <boxGeometry args={[pw, 0.12, 0.3]} />
+              </mesh>
+              <mesh position={[px + 0.15, 0, pz + pd / 2]} material={trimMat}>
+                <boxGeometry args={[0.3, 0.12, pd]} />
+              </mesh>
+              <mesh position={[px + pw - 0.15, 0, pz + pd / 2]} material={trimMat}>
+                <boxGeometry args={[0.3, 0.12, pd]} />
+              </mesh>
+            </group>
+          )}
         </group>
-      )}
+      ))}
       {/* DOM label — drei <Text> spawns a WebGL context per SDF atlas and
           26 of them blew Chrome's context budget, killing the scene (black screen).
           Fades out beyond ~110 world units so distant views stay uncluttered. */}

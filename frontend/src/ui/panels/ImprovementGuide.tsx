@@ -1,21 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Ruler } from "lucide-react";
 import { apiFetch } from "../../lib/auth";
 import { useCityLayout } from "../../lib/city";
 import { useCity } from "../../store/useCity";
+import { useUi } from "../../store/useUi";
 import { DraggablePanel } from "../DraggablePanel";
 import { useAsyncAction } from "../useAsyncAction";
 
 /* ── AI improvement guide — repo-wide advice panel.
-       Closed state renders as a launcher INSIDE the right rail (flows with
-       alerts/inspector/weather, no magic viewport offsets). ── */
+       Visibility = panel store (☰ MENU toggle / rail CTA / cc-open-guide);
+       ✕ hides it popup-style, reopen from the menu. ── */
 export function ImprovementGuide() {
-  const [open, setOpen] = useState(false);
   const L = useCityLayout();
   const edges = useCity((s) => s.city.edges);
+  const hidePanel = useUi((s) => s.hidePanel);
 
   useEffect(() => {
-    const openIt = () => setOpen(true);
+    const openIt = () => useUi.getState().showPanel("guide");
     window.addEventListener("cc-open-guide", openIt);
     return () => window.removeEventListener("cc-open-guide", openIt);
   }, []);
@@ -40,17 +41,6 @@ export function ImprovementGuide() {
     return (json.data?.guide ?? JSON.stringify(json.data)) as string;
   });
 
-  if (!open)
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="pointer-events-auto flex items-center gap-2 self-start rounded-xl border-[1.5px] border-black-ink bg-paper/95 px-3 py-2 text-xs font-bold hover:border-signal"
-      >
-        <Ruler size={12} />
-        Improvement Guide
-      </button>
-    );
-
   return (
     <DraggablePanel id="guide" className="pointer-events-auto fixed inset-x-4 top-16 bottom-16 z-40 mx-auto max-w-xl" minW={320} minH={240}>
       <div className="flex h-full flex-col overflow-hidden rounded-xl border-[1.5px] border-black-ink bg-paper/98 shadow-[6px_6px_0_rgba(0,0,0,.4)]">
@@ -59,7 +49,7 @@ export function ImprovementGuide() {
             <Ruler size={13} />
             AI IMPROVEMENT GUIDE — {L.buildings.length} BUILDINGS SCANNED
           </span>
-          <button onClick={() => setOpen(false)} aria-label="Close improvement guide" className="text-black-ink/45 hover:text-signal">
+          <button onClick={() => hidePanel("guide")} aria-label="Close improvement guide" className="text-black-ink/45 hover:text-signal">
             ✕
           </button>
         </div>

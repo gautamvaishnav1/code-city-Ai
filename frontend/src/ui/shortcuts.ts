@@ -1,7 +1,6 @@
 import { useEffect } from "react";
-import { anyOverlayOpen } from "../store/useUi";
+import { anyOverlayOpen, useUi } from "../store/useUi";
 import { useCity } from "../store/useCity";
-import { pushLog } from "./logFeed";
 
 /** Single source of truth for city keyboard shortcuts — the global handler
     AND the legend both read this list, so they can never drift apart. */
@@ -17,17 +16,10 @@ export const SHORTCUTS: Shortcut[] = [
   {
     key: "/",
     label: "search",
-    run: () => document.querySelector<HTMLInputElement>("#city-search")?.focus(),
-  },
-  {
-    key: "enter",
-    label: "run login",
     run: () => {
-      const st = useCity.getState();
-      st.patch({ traffic: true, following: true });
-      st.dispatchMission("login"); // spawns the slow courier car w/ info cards
-      st.notify("🚗 POST /api/v1/auth/login dispatched — courier en route");
-      pushLog("fe", "RUN ▸ courier dispatched · POST /api/v1/auth/login", "info");
+      // search lives inside the ☰ menu now — open it, then focus the field
+      useUi.getState().setMenuOpen(true);
+      window.setTimeout(() => document.querySelector<HTMLInputElement>("#city-search")?.focus(), 0);
     },
   },
   {
@@ -78,15 +70,6 @@ export const SHORTCUTS: Shortcut[] = [
   },
 ];
 
-function runDemoEvents() {
-  window.addEventListener("cc-run-login", () =>
-    document.getElementById("cc-run-btn")?.click(),
-  );
-  window.addEventListener("cc-fail-payment", () =>
-    document.getElementById("cc-fail-btn")?.click(),
-  );
-}
-
 /** Global keyboard handler. Stands down while typing in inputs or while an
     overlay (command palette / auth modal) is open. */
 export function useCityShortcuts(enabled: boolean) {
@@ -112,5 +95,3 @@ export function useCityShortcuts(enabled: boolean) {
     return () => window.removeEventListener("keydown", onKey);
   }, [enabled]);
 }
-
-export { runDemoEvents };

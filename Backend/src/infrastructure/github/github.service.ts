@@ -23,6 +23,10 @@ export interface RepoInfo {
 }
 
 const GITHUB_API = "https://api.github.com";
+/** Hard cap on the downloaded tarball to prevent OOM/disk-fill DoS. */
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024; // 200 MB
+/** execFile maxBuffer for tar/git stdout+stderr (default 1 MB is too small for git clone progress). */
+const EXEC_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 
 function githubHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers: Record<string, string> = {
@@ -119,10 +123,25 @@ export async function downloadAndExtractRepo(
       signal: AbortSignal.timeout(60_000)
     });
     if (res.ok && res.body) {
-      buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.length < 200) {
-        logger.warn("Downloaded repository archive looks empty; will try git clone");
-        buffer = null;
+      // Reject oversized archives before buffering them in memory
+      const contentLength = Number(res.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > MAX_ARCHIVE_BYTES) {
+        logger.warn("Repository archive exceeds size cap; falling back to git clone", {
+          bytes: contentLength,
+          cap: MAX_ARCHIVE_BYTES
+        });
+      } else {
+        buffer = Buffer.from(await res.arrayBuffer());
+        if (buffer.length > MAX_ARCHIVE_BYTES) {
+          logger.warn("Downloaded archive exceeds size cap; falling back to git clone", {
+            bytes: buffer.length,
+            cap: MAX_ARCHIVE_BYTES
+          });
+          buffer = null;
+        } else if (buffer.length < 200) {
+          logger.warn("Downloaded repository archive looks empty; will try git clone");
+          buffer = null;
+        }
       }
     } else if (res.status !== 404) {
       logger.warn(`GitHub codeload error (${res.status}); will try git clone`);
@@ -135,17 +154,44 @@ export async function downloadAndExtractRepo(
   }
 
   if (buffer) {
-    fs.writeFileSync(tarPath, buffer);
+    // Validate gzip magic bytes (0x1f 0x8b) to catch non-gzip responses
+    if (buffer.length < 2 || buffer[0] !== 0x1f || buffer[1] !== 0x8b) {
+      logger.warn("Downloaded file is not valid gzip; falling back to git clone");
+      buffer = null;
+    }
+  }
+
+  if (buffer) {
+    try {
+      fs.writeFileSync(tarPath, buffer);
+    } catch (err) {
+      // Clean up the temp dir before rethrowing — otherwise it leaks forever
+      fs.rmSync(workRoot, { recursive: true, force: true });
+      throw ApiError.internal(
+        `Failed to write repository archive to disk: ${err instanceof Error ? err.message : err}`
+      );
+    }
     // System bsdtar ships with Windows 10+/macOS/Linux — zero extra deps.
     try {
       await execFileAsync("tar", ["-xzf", tarPath, "-C", extractDir, "--strip-components=1"], {
         timeout: 60_000,
-        windowsHide: true
+        windowsHide: true,
+        maxBuffer: EXEC_MAX_BUFFER
       });
     } catch (err) {
-      fs.rmSync(workRoot, { recursive: true, force: true });
-      logger.error("tar extraction failed", { message: err instanceof Error ? err.message : err });
-      throw ApiError.internal("Failed to extract repository archive");
+      // If tar fails, clean up and fall back to git clone instead of throwing
+      logger.warn("tar extraction failed; falling back to git clone", {
+        message: err instanceof Error ? err.message : err
+      });
+      fs.rmSync(extractDir, { recursive: true, force: true });
+      fs.mkdirSync(extractDir, { recursive: true });
+      try {
+        fs.unlinkSync(tarPath);
+      } catch {
+        /* ignore */
+      }
+      await cloneViaGit(info, branch, extractDir, workRoot);
+      buffer = null; // mark as handled by git clone — skip the fallback below
     } finally {
       try {
         fs.unlinkSync(tarPath);
@@ -182,7 +228,12 @@ async function cloneViaGit(info: RepoInfo, branch: string, extractDir: string, w
     await execFileAsync(
       "git",
       ["clone", "--depth", "1", "--single-branch", "--branch", branch, cloneUrl, extractDir],
-      { timeout: 120_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }
+      {
+        timeout: 120_000,
+        windowsHide: true,
+        maxBuffer: EXEC_MAX_BUFFER,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+      }
     );
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
@@ -199,4 +250,74 @@ async function cloneViaGit(info: RepoInfo, branch: string, extractDir: string, w
 
 function redact(input: string): string {
   return env.githubToken ? input.split(env.githubToken).join("***") : input;
+}
+
+/**
+ * Removes leftover `software-world-*` work dirs (repo downloads / git clones)
+ * that a crashed or restarted process never cleaned up. Safe to call at boot:
+ * no analysis is in flight yet, so any such dir under the OS temp dir is orphaned.
+ * Returns how many dirs were removed.
+ */
+export function cleanupStaleWorkDirs(maxAgeMs = 60 * 60 * 1000): number {
+  let removed = 0;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(os.tmpdir());
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  for (const name of entries) {
+    if (!name.startsWith("software-world-")) continue;
+    const full = path.join(os.tmpdir(), name);
+    try {
+      const stat = fs.statSync(full);
+      if (now - stat.mtimeMs >= maxAgeMs) {
+        fs.rmSync(full, { recursive: true, force: true });
+        removed++;
+      }
+    } catch {
+      /* a concurrently-running analysis may be touching it — skip */
+    }
+  }
+  return removed;
+}
+
+/**
+ * Reports the git/tar versions at boot so production logs prove the clone
+ * toolchain is present BEFORE the first analysis runs. `git` backs the
+ * shallow-clone fallback (used whenever the tarball download/extract fails);
+ * without it that path breaks silently until an analysis needs it. Non-fatal:
+ * logs a warning when a tool is missing instead of refusing to start.
+ */
+export async function logCloneToolchain(): Promise<void> {
+  const version = async (cmd: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync(cmd, ["--version"], {
+        timeout: 10_000,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024
+      });
+      return stdout.trim().split("\n")[0] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [gitVersion, tarVersion] = await Promise.all([version("git"), version("tar")]);
+
+  logger.info("Clone toolchain", {
+    git: gitVersion ?? "MISSING",
+    tar: tarVersion ?? "MISSING"
+  });
+
+  if (!gitVersion) {
+    logger.warn(
+      "git is NOT available — the shallow-clone fallback will fail if the tarball download/extract path also fails. " +
+        "In Docker, install it in the runtime image: apk add --no-cache git"
+    );
+  }
+  if (!tarVersion) {
+    logger.warn("tar is NOT available — repository tarball extraction will always fall back to git clone.");
+  }
 }

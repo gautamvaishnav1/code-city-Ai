@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../../shared/middleware/auth.middleware";
+import { requireAuth, requireDemoForGuest } from "../../shared/middleware/auth.middleware";
 import { validate } from "../../shared/middleware/validate.middleware";
 import { explain } from "./repo-explain.controller";
 
@@ -11,6 +11,6 @@ const explainSchema = z.object({
 });
 
 router.use(requireAuth);
-router.post("/explain", validate({ body: explainSchema }), explain);
+router.post("/explain", requireDemoForGuest, validate({ body: explainSchema }), explain);
 
 export default router;

@@ -9,6 +9,7 @@
  *  - all arrays are sorted -> byte-identical JSON for identical input
  */
 import { ApiError } from "../../shared/utils/api-error";
+import { canonicalType } from "../analysis/architecture.schema";
 import type { ProjectMetadata } from "../parser/parser.types";
 import type {
   Architecture,
@@ -46,16 +47,17 @@ const DISTRICT_SPECS: Record<string, DistrictSpec> = {
 const DISTRICT_BOUNDS = { width: 160, depth: 160 };
 
 function districtKeyFor(type: string): keyof typeof DISTRICT_SPECS {
-  if (type === "frontend") return "frontend";
-  if (type === "model" || type === "database") return "data";
-  if (type === "integration" || type === "external") return "external";
+  const t = canonicalType(type);
+  if (t === "frontend") return "frontend";
+  if (t === "model" || t === "database") return "data";
+  if (t === "integration" || t === "external") return "external";
   if (
-    type === "routes" ||
-    type === "controller" ||
-    type === "service" ||
-    type === "middleware" ||
-    type === "auth" ||
-    type === "config"
+    t === "routes" ||
+    t === "controller" ||
+    t === "service" ||
+    t === "middleware" ||
+    t === "auth" ||
+    t === "config"
   ) {
     return "backend";
   }
@@ -134,13 +136,17 @@ function classifyConnection(label: string): ConnectionType {
 const r1 = (v: number): number => Math.round(v * 10) / 10;
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
+/** NOTE: these MUST compare exactly the way assertCityWorld's isSortedStrings()
+ *  does — it checks the CONCATENATED key `from|to|label` with localeCompare,
+ *  and sorting field-by-field gives a different order (ICU weights the "|"
+ *  separator differently from the field boundary), which made every analysis
+ *  fail with "connections array not deterministically sorted". */
 function sortedComponents<T extends { id: string }>(list: T[]): T[] {
-  return [...list].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return [...list].sort((a, b) => a.id.localeCompare(b.id));
 }
 function sortedConnections(list: Array<{ from: string; to: string; label: string }>) {
-  return [...list].sort(
-    (a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.label.localeCompare(b.label)
-  );
+  const key = (c: { from: string; to: string; label: string }) => `${c.from}|${c.to}|${c.label}`;
+  return [...list].sort((a, b) => key(a).localeCompare(key(b)));
 }
 
 /* ------------------------------------------------------------------ */

@@ -10,7 +10,9 @@ import type {
   FunctionFact,
   ImportFact,
   ModelFact,
-  RouteFact
+  RouteFact,
+  RuntimeSignals,
+  SyntaxFacts
 } from "./parser.types";
 
 type TraverseFn = (ast: t.File, visitor: Record<string, (path: any) => void>) => void;
@@ -21,8 +23,10 @@ const traverse: TraverseFn = ((traverseModule as unknown as { default?: Traverse
 
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const KNOWN_ROUTER_NAMES = /^(app|router|api|server|routes?|routers?)$/i;
-const AUTH_MIDDLEWARE_RE =
-  /^(auth|authmiddleware|authenticate|authenticated|isauthenticated|isauth|ensureauthenticated|ensureloggedin|protect|requireauth|requiresauth|requireuser|verifytoken|verifyjwt|checkauth|withauth|authorize|authorise|isauthorized)$/i;
+/** Names of middlewares that put a route behind auth. Exported so the API can
+ *  recognise router-level guards (`router.use(requireAuth)`) too. */
+export const AUTH_MIDDLEWARE_RE =
+  /^(auth|authmiddleware|authenticate|authenticated|isauthenticated|isauth|ensureauthenticated|ensureloggedin|protect|requireauth|requiresauth|requireuser|isrefreshtokenvalid|verifytoken|verifyjwt|checkauth|withauth|authorize|authorise|isauthorized)$/i;
 
 const CAPS = { functions: 300, classes: 100, imports: 200, exports: 200, routes: 200, models: 40 };
 
@@ -211,6 +215,36 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
   let jsxCount = 0;
   const modelSeen = new Set<string>();
 
+  /* ---- ES6+ syntax detection ---- */
+  const syntax: SyntaxFacts = {
+    hasArrowFunctions: false,
+    hasTemplateLiterals: false,
+    hasDestructuring: false,
+    hasSpreadOperator: false,
+    hasAsyncAwait: false,
+    hasGenerators: false,
+    hasForOf: false,
+    hasDefaultParams: false,
+    hasClasses: false,
+    hasGettersSetters: false,
+    hasComputedProps: false,
+    hasLetConst: false,
+    hasModules: false,
+    isES6Plus: false
+  };
+
+  /* ---- runtime / diagnostic signals ---- */
+  const signals: RuntimeSignals = {
+    processEnvUsage: 0,
+    consoleErrorCalls: 0,
+    consoleWarnCalls: 0,
+    consoleLogCalls: 0,
+    awaitCalls: 0,
+    swallowedErrors: 0,
+    requireCalls: 0,
+    cjsExports: 0
+  };
+
   const addRoutes = (owner: string, facts: RouteFact[]) => {
     const list = routesByOwner.get(owner) ?? [];
     for (const f of facts) if (list.length < CAPS.routes) list.push(f);
@@ -232,6 +266,7 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
   /* ---------------- visitors ---------------- */
 
   const visitImportDeclaration = (path: NodePath<t.ImportDeclaration>): void => {
+    syntax.hasModules = true;
     const source = path.node.source.value as string;
     const specifiers = path.node.specifiers.map((spec) => {
       if (spec.type === "ImportDefaultSpecifier") return spec.local.name;
@@ -246,6 +281,8 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
   const visitRequireCall = (path: NodePath<t.CallExpression>): void => {
     const callee = path.node.callee;
     if (!(callee.type === "Identifier" && callee.name === "require")) return;
+    signals.requireCalls++;
+    syntax.hasModules = true;
     const arg = staticString(path.node.arguments[0]);
     if (arg === null) return;
     const parent = path.parent;
@@ -321,6 +358,8 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
     const dotted = memberExprDottedName(left);
     if (!dotted) return;
     if (dotted === "module.exports") {
+      signals.cjsExports++;
+      syntax.hasModules = true;
       const right = path.node.right;
       if (right.type === "ObjectExpression") {
         const names = objectKeys(right).filter((k) => k !== "...");
@@ -332,6 +371,8 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
         markExported(name);
       }
     } else if (dotted.startsWith("module.exports.") || dotted.startsWith("exports.")) {
+      signals.cjsExports++;
+      syntax.hasModules = true;
       const name = dotted.split(".").pop() ?? "";
       if (name) {
         exports.push({ file: filePath, names: [name], kind: "named" });
@@ -661,11 +702,131 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
     }
   };
 
+  /* ---------------- ES6+ syntax detection visitors ---------------- */
+
+  const visitArrowFunction = (path: NodePath<t.ArrowFunctionExpression>): void => {
+    syntax.hasArrowFunctions = true;
+    // default params?
+    if (path.node.params.some((p) => p.type === "AssignmentPattern")) {
+      syntax.hasDefaultParams = true;
+    }
+  };
+
+  const visitTemplateLiteral = (path: NodePath<t.TemplateLiteral>): void => {
+    syntax.hasTemplateLiterals = true;
+  };
+
+  const visitVariableDeclaratorSyntax = (path: NodePath<t.VariableDeclarator>): void => {
+    const id = path.node.id;
+    if (id.type === "ObjectPattern" || id.type === "ArrayPattern") {
+      syntax.hasDestructuring = true;
+    }
+    // let/const detection via parent
+    const parent = path.parent;
+    if (parent.type === "VariableDeclaration" && parent.kind !== "var") {
+      syntax.hasLetConst = true;
+    }
+    // default params on arrow/function assigned to variable
+    const init = path.node.init;
+    if (
+      init &&
+      (init.type === "ArrowFunctionExpression" || init.type === "FunctionExpression") &&
+      init.params.some((p) => p.type === "AssignmentPattern")
+    ) {
+      syntax.hasDefaultParams = true;
+    }
+  };
+
+  const visitSpreadElement = (path: NodePath<t.SpreadElement | t.RestElement>): void => {
+    syntax.hasSpreadOperator = true;
+  };
+
+  const visitAwaitExpression = (path: NodePath<t.AwaitExpression>): void => {
+    syntax.hasAsyncAwait = true;
+    signals.awaitCalls++;
+  };
+
+  const visitForOfStatement = (path: NodePath<t.ForOfStatement>): void => {
+    syntax.hasForOf = true;
+  };
+
+  const visitObjectMethod = (path: NodePath<t.ObjectMethod>): void => {
+    const node = path.node;
+    if (node.kind === "get" || node.kind === "set") syntax.hasGettersSetters = true;
+    if (node.computed) syntax.hasComputedProps = true;
+    if (node.generator) syntax.hasGenerators = true;
+  };
+
+  const visitClassMethod = (path: NodePath<t.ClassMethod>): void => {
+    const node = path.node;
+    if (node.kind === "get" || node.kind === "set") syntax.hasGettersSetters = true;
+    if (node.computed) syntax.hasComputedProps = true;
+    if (node.generator) syntax.hasGenerators = true;
+  };
+
+  const visitClassDeclarationSyntax = (
+    path: NodePath<t.ClassDeclaration | t.ClassExpression>
+  ): void => {
+    syntax.hasClasses = true;
+  };
+
+  /* ---------------- runtime / diagnostic signal visitors ---------------- */
+
+  const visitProcessEnv = (path: NodePath<t.MemberExpression>): void => {
+    const dotted = memberExprDottedName(path.node);
+    if (dotted === "process.env" || dotted?.startsWith("process.env.")) {
+      signals.processEnvUsage++;
+    }
+  };
+
+  const visitConsoleCall = (path: NodePath<t.CallExpression>): void => {
+    const callee = path.node.callee;
+    if (callee.type !== "MemberExpression") return;
+    if (callee.object.type !== "Identifier" || callee.object.name !== "console") return;
+    const method = propertyName(callee);
+    if (method === "error") signals.consoleErrorCalls++;
+    else if (method === "warn") signals.consoleWarnCalls++;
+    else if (method === "log") signals.consoleLogCalls++;
+  };
+
+  /** Detect catch blocks that swallow errors (no throw / rethrow inside). */
+  const visitTryStatement = (path: NodePath<t.TryStatement>): void => {
+    const handler = path.node.handler;
+    if (!handler) return;
+    const body = handler.body.body;
+    // empty catch or catch that only logs without re-throwing = swallowed
+    let hasRethrow = false;
+    let hasLogOnly = true;
+    for (const stmt of body) {
+      if (stmt.type === "ThrowStatement") {
+        hasRethrow = true;
+        hasLogOnly = false;
+        break;
+      }
+      // allow console.error/warn/log but still counts as swallowed if no rethrow
+      if (
+        !(
+          stmt.type === "ExpressionStatement" &&
+          stmt.expression.type === "CallExpression" &&
+          stmt.expression.callee.type === "MemberExpression" &&
+          stmt.expression.callee.object.type === "Identifier" &&
+          stmt.expression.callee.object.name === "console"
+        )
+      ) {
+        hasLogOnly = false;
+      }
+    }
+    if (!hasRethrow && (body.length === 0 || hasLogOnly)) {
+      signals.swallowedErrors++;
+    }
+  };
+
   /* ---------------- run traversal ---------------- */
 
   traverse(ast, {
     ImportDeclaration: visitImportDeclaration,
     TSImportEqualsDeclaration: (path: NodePath<t.TSImportEqualsDeclaration>) => {
+      syntax.hasModules = true;
       const ref = path.node.moduleReference;
       if (ref.type === "TSExternalModuleReference" && typeof ref.expression.value === "string") {
         recordImport(ref.expression.value, [path.node.id.name]);
@@ -675,23 +836,54 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
       visitRequireCall(path);
       visitAuthCalls(path);
       visitModelCall(path);
+      visitConsoleCall(path);
     },
-    ExportNamedDeclaration: visitExportNamed,
-    ExportDefaultDeclaration: visitExportDefault,
-    ExportAllDeclaration: visitExportAll,
+    ExportNamedDeclaration: (path) => {
+      syntax.hasModules = true;
+      visitExportNamed(path);
+    },
+    ExportDefaultDeclaration: (path) => {
+      syntax.hasModules = true;
+      visitExportDefault(path);
+    },
+    ExportAllDeclaration: (path) => {
+      syntax.hasModules = true;
+      visitExportAll(path);
+    },
     AssignmentExpression: visitModuleExportsAssignment,
     VariableDeclarator: (path: NodePath<t.VariableDeclarator>) => {
       visitRouterCreation(path);
+      visitVariableDeclaratorSyntax(path);
     },
     NewExpression: visitSchemaNew,
     FunctionDeclaration: (path: NodePath<t.FunctionDeclaration>) => visitFunction(path),
     FunctionExpression: (path: NodePath<t.FunctionExpression>) => visitFunction(path),
-    ArrowFunctionExpression: (path: NodePath<t.ArrowFunctionExpression>) => visitFunction(path),
-    ClassDeclaration: (path: NodePath<t.ClassDeclaration>) => visitClass(path),
-    ClassExpression: (path: NodePath<t.ClassExpression>) => visitClass(path),
+    ArrowFunctionExpression: (path: NodePath<t.ArrowFunctionExpression>) => {
+      visitFunction(path);
+      visitArrowFunction(path);
+    },
+    ClassDeclaration: (path: NodePath<t.ClassDeclaration>) => {
+      visitClass(path);
+      visitClassDeclarationSyntax(path);
+    },
+    ClassExpression: (path: NodePath<t.ClassExpression>) => {
+      visitClass(path);
+      visitClassDeclarationSyntax(path);
+    },
     JSXOpeningElement: () => {
       jsxCount++;
-    }
+    },
+    // ES6+ syntax visitors
+    TemplateLiteral: visitTemplateLiteral,
+    SpreadElement: visitSpreadElement,
+    RestElement: visitSpreadElement,
+    AwaitExpression: visitAwaitExpression,
+    ForOfStatement: visitForOfStatement,
+    ObjectMethod: visitObjectMethod,
+    ClassMethod: visitClassMethod,
+    // runtime signal visitors
+    MemberExpression: visitProcessEnv,
+    TryStatement: visitTryStatement
   });
 
   // Route calls need the full picture of router vars -> second pass.
@@ -735,6 +927,22 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
   const role = detectFileRole(filePath, jsxCount > 0);
   const baseName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
   const stem = baseName.replace(/\.(jsx?|tsx?|mjs|cjs)$/i, "");
+
+  // compute isES6Plus: any ES6+ feature beyond plain ES5
+  syntax.isES6Plus =
+    syntax.hasArrowFunctions ||
+    syntax.hasTemplateLiterals ||
+    syntax.hasDestructuring ||
+    syntax.hasSpreadOperator ||
+    syntax.hasAsyncAwait ||
+    syntax.hasGenerators ||
+    syntax.hasForOf ||
+    syntax.hasDefaultParams ||
+    syntax.hasClasses ||
+    syntax.hasGettersSetters ||
+    syntax.hasComputedProps ||
+    syntax.hasLetConst ||
+    syntax.hasModules;
 
   // controllers & services classification
   const controllers: ComponentFact[] = [];
@@ -782,6 +990,8 @@ export function analyzeAST(ast: t.File, filePath: string, code: string): FileFac
     lines: code.split("\n").length,
     bytes: Buffer.byteLength(code, "utf8"),
     role,
+    syntax,
+    signals,
     imports,
     exports,
     functions,

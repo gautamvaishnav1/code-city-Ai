@@ -51,12 +51,31 @@ export const env = {
   smtpPort: num(process.env.SMTP_PORT, 587),
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPass: process.env.SMTP_PASS ?? "",
-  mailFrom: process.env.MAIL_FROM ?? "Software World <no-reply@software-world.local>"
+  mailFrom: process.env.MAIL_FROM ?? "Software World <no-reply@software-world.local>",
+  // ---- Fallback SMTP (used automatically when the primary SMTP send fails) ----
+  // Gmail's SMTP is unreliable from PaaS hosts such as Render (outbound port 587
+  // is often blocked / rate-limited). Point these at a transactional relay
+  // (Brevo, SendGrid, Mailgun, AWS SES...) so OTP delivery survives a primary outage.
+  smtpFallbackHost: process.env.SMTP_FALLBACK_HOST ?? "",
+  smtpFallbackPort: num(process.env.SMTP_FALLBACK_PORT, 587),
+  smtpFallbackUser: process.env.SMTP_FALLBACK_USER ?? "",
+  smtpFallbackPass: process.env.SMTP_FALLBACK_PASS ?? "",
+  /** Sender for fallback mail. Brevo requires a verified sender — set this to one
+   *  that matches your Brevo account, otherwise it falls back to MAIL_FROM. */
+  mailFallbackFrom: process.env.MAIL_FALLBACK_FROM ?? "",
+  /** Number of reverse proxies in front of the app (for express "trust proxy").
+   *  0 = direct (safe default); 1 = behind one proxy/LB (e.g. nginx, ALB). */
+  trustProxy: (() => {
+    const n = Number(process.env.TRUST_PROXY);
+    return Number.isInteger(n) && n >= 0 ? n : 0;
+  })()
 } as const;
 
 export const isProd = env.nodeEnv === "production";
 export const isTest = env.nodeEnv === "test";
 export const smtpConfigured = (): boolean => Boolean(env.smtpHost && env.smtpUser && env.smtpPass);
+export const smtpFallbackConfigured = (): boolean =>
+  Boolean(env.smtpFallbackHost && env.smtpFallbackUser && env.smtpFallbackPass);
 
 /* ------------------------- fail-fast security checks ------------------------- */
 /** Refuses to boot in production with insecure defaults. Crashing loudly beats

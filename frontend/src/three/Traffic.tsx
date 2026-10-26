@@ -17,6 +17,9 @@ import type { Verb } from "./missionTypes";
  *  avenue instead of the old racetrack. */
 const SPEED = { fast: 9, medium: 5.5, slow: 3 };
 const LAT_COLOR = { fast: "#22c55e", medium: "#eab308", slow: "#ef4444" };
+/** livery for the ambient fleet — one hue per lane so traffic reads as
+ *  distinct routes instead of one grey swarm */
+const AMBIENT_COLORS = ["#38bdf8", "#facc15", "#a78bfa", "#34d399", "#f472b6", "#22d3ee"];
 
 /**
  * Models whose nose points at −Z in local space. `lookAt` aims +Z along the
@@ -27,8 +30,9 @@ const REVERSE_MODELS = new Set(["/models/vehicles/ferrari.glb"]);
 
 /**
  * Build a driving curve for a flow. Prefers the hand-authored street lane in
- * L.flowPaths (cars ride actual roads); falls back to building centers only
- * when no lane exists for that flow.
+ * L.flowPaths (cars ride actual roads); derived flows are routed over the
+ * real road graph. Cars NEVER cut across lawns — when neither is available
+ * the flow gets no courier at all.
  */
 function makeCurve(L: CityLayout, name: string, ids: string[]): THREE.CatmullRomCurve3 | null {
   const lanePts = L.flowPaths?.[name];
@@ -40,9 +44,9 @@ function makeCurve(L: CityLayout, name: string, ids: string[]): THREE.CatmullRom
       0.08,
     );
   }
-  // derived flows have no hand-authored lane — route them along the REAL
-  // road network (Dijkstra over streets + bridge), not straight over lawns
-  console.info(`[Traffic] no street lane for "${name}" — routing over the road graph`);
+  // derived flows carry no hand-authored lane — route them along the REAL
+  // road network (Dijkstra over streets + bridge), never straight over lawns
+  console.info(`[Traffic] routing "${name}" over the road graph`);
   const centers = ids.filter(Boolean).map((id) => {
     const b = L.byId.get(id);
     if (!b) console.warn(`[Traffic] unknown flow id "${id}" — skipped`);
@@ -50,7 +54,13 @@ function makeCurve(L: CityLayout, name: string, ids: string[]): THREE.CatmullRom
   }).filter(Boolean).map((b) => [(b as any).pos[0], (b as any).pos[2]] as [number, number]);
   if (centers.length < 2) return null;
   const onRoads = snapToRoads(L, centers);
-  let wps: [number, number, number][] = (onRoads ?? centers).map(([x, z]) => [x, ROAD_Y, z]);
+  if (!onRoads) {
+    // NO lawn fallback: a car that can't reach the street graph stays in the
+    // garage rather than cutting across the grass
+    console.warn(`[Traffic] "${name}" has no drivable road path between its buildings — no courier spawned`);
+    return null;
+  }
+  let wps: [number, number, number][] = onRoads.map(([x, z]) => [x, ROAD_Y, z]);
   wps = withRiverCrossing(wps); // bridge legs (also fixes the virtual span edge)
   wps = offsetLane(wps, 0.75);  // right-hand traffic
   return new THREE.CatmullRomCurve3(
@@ -235,21 +245,23 @@ function autoSpec(chain: string[], L: CityLayout): HopSpec[] {
   return hops;
 }
 
+/** u-position (0..1) of the point on the lane closest to (x, z) */
+function curveUFor(curve: THREE.CatmullRomCurve3, x: number, z: number): number {
+  const N = 480;
+  const t = new THREE.Vector3(x, 0, z);
+  let best = 0, bd = Infinity;
+  for (let i = 0; i <= N; i++) {
+    const p = curve.getPointAt(i / N);
+    const d = p.distanceToSquared(t);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best / N;
+}
+
 function stopsFor(curve: THREE.CatmullRomCurve3, L: CityLayout, flow: string, chain: string[]): Hop[] {
   const spec = MISSION_SPECS[flow] ?? autoSpec(chain, L);
   if (spec.length === 0) return [];
-  const N = 480;
-  const pts: THREE.Vector3[] = [];
-  for (let i = 0; i <= N; i++) pts.push(curve.getPointAt(i / N));
-  const uFor = (x: number, z: number) => {
-    const t = new THREE.Vector3(x, 0, z);
-    let best = 0, bd = Infinity;
-    for (let i = 0; i <= N; i++) {
-      const d = pts[i].distanceToSquared(t);
-      if (d < bd) { bd = d; best = i; }
-    }
-    return best / N;
-  };
+  const uFor = (x: number, z: number) => curveUFor(curve, x, z);
   const hops: Hop[] = spec.map((h) => ({
     ...h,
     u: h.buildingId
@@ -269,6 +281,41 @@ function stopsFor(curve: THREE.CatmullRomCurve3, L: CityLayout, flow: string, ch
   return hops;
 }
 
+/** server verdict → card-sized lines (the strip renders one line per entry) */
+function wrapNote(note: string, width = 44): string[] {
+  const words = note.split(" ");
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + " " + w).trim().length > width) {
+      if (cur) lines.push(cur.trim());
+      cur = w;
+    } else cur += " " + w;
+  }
+  if (cur.trim()) lines.push(cur.trim());
+  return lines;
+}
+
+/** The request never got a JWT → the courier drives only as far as the toll
+ *  plaza, the barrier stays down, and the mission ends with a 401 hop. */
+function denyAtToll(hops: Hop[], curve: THREE.CatmullRomCurve3, L: CityLayout): Hop[] {
+  const tollU = THREE.MathUtils.clamp(curveUFor(curve, L.toll.x, L.toll.z), 0.05, 0.975);
+  const kept = hops.filter((h) => h.u < tollU - 0.001);
+  kept.push({
+    u: tollU,
+    landmark: "toll",
+    title: "401 UNAUTHORIZED · JWT MISSING",
+    verb: "deny",
+    detail: [
+      "requireAuth() rejected the request:",
+      "no Authorization: Bearer <jwt> header",
+      "was attached. The barrier stays down",
+      "— the request was never sent.",
+    ],
+  });
+  return kept;
+}
+
 const MISSION_CRUISE = 0.03;   // u/sec — a stately roll, ~½ lap per minute
 const MISSION_DWELL = 3.4;     // sec paused under each gateway card (was 2.6)
 // runtime fast-forward (2× button in the mission strip, or ?fm=1 on load)
@@ -282,7 +329,24 @@ function MissionCar({ curve, L, flow = "login", chain, onEnd }: { curve: THREE.C
   const dwellT = useRef(0);
   const [, force] = useState(0); // re-render when the active hop changes
   const activeHop = useRef(-1);
-  const hops = useMemo(() => stopsFor(curve, L, flow, chain), [curve, L, flow, chain]);
+  // JWT policy: a blocked mission stops at the toll; a fired probe replaces the
+  // final hop's copy with the REAL status/latency the server returned.
+  const blocked = useCity((s) => (s.mission?.flow === flow ? !!s.mission.blocked : false));
+  const probe = useCity((s) => (s.mission?.flow === flow ? s.mission.probe : undefined));
+  const hops = useMemo(() => {
+    const base = stopsFor(curve, L, flow, chain);
+    if (base.length === 0) return base;
+    if (blocked) return denyAtToll(base, curve, L);
+    if (!probe?.sent) return base;
+    const out = base.map((h) => ({ ...h }));
+    const last = out[out.length - 1];
+    last.title = probe.status ? `${probe.status} · response returned` : last.title;
+    last.detail = [
+      `${probe.status ?? "—"} · ${probe.ms}ms round-trip · ${probe.withJwt ? "JWT attached" : "NO JWT attached"}`,
+      ...wrapNote(probe.note),
+    ];
+    return out;
+  }, [curve, L, flow, chain, blocked, probe]);
   // cinematic camera state — a low chase cam while driving, a slow arc around
   // the gateway while dwelling. Angles are absolute world-space so the arc is
   // stable no matter which direction the car approached from.
@@ -384,6 +448,9 @@ function MissionCar({ curve, L, flow = "login", chain, onEnd }: { curve: THREE.C
 
   if (hops.length === 0) return null;
 
+  // the active hop is a 401 → flag the car so it wears the JWT MISSING badge
+  const deniedNow = hops[Math.min(hopIdx.current, hops.length - 1)]?.verb === "deny";
+
   // The explainer cards used to float above the car in 3D (distanceFactor=52)
   // where they collided with district labels and right-rail panels. They now
   // live in the HUD's bottom-center MissionStrip; the car keeps only its
@@ -395,8 +462,16 @@ function MissionCar({ curve, L, flow = "login", chain, onEnd }: { curve: THREE.C
       {/* request beacon */}
       <mesh position={[0, 1.55, 0]}>
         <sphereGeometry args={[0.09, 10, 10]} />
-        <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={1.4 + ENV.night * 3} />
+        <meshStandardMaterial color={deniedNow ? "#e30613" : "#ef4444"} emissive={deniedNow ? "#e30613" : "#ef4444"} emissiveIntensity={1.4 + ENV.night * 3} />
       </mesh>
+      {/* 401 badge — only while the barrier holds the courier at the toll */}
+      {deniedNow && (
+        <Html center position={[0, 2.7, 0]} distanceFactor={46} zIndexRange={[20, 10]}>
+          <div className="pointer-events-none select-none whitespace-nowrap rounded-none border-[1.5px] border-black-ink bg-signal px-2 py-1 font-mono text-[10px] font-black text-paper shadow-[3px_3px_0_rgba(0,0,0,.45)]">
+            ⛔ 401 · JWT MISSING
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -442,27 +517,63 @@ export function Traffic({ L }: { L: CityLayout }) {
   // so ANY endpoint a developer's app exposes can be run.
   const city = useCity((s) => s.city);
   const merged = useMemo(() => allFlows(city), [city]);
+  const handLanes = useMemo(() => Object.keys(L.flowPaths ?? {}), [L]);
   const curves = useMemo(() => {
     const out: Record<string, THREE.CatmullRomCurve3 | null> = {};
     for (const [name, ids] of Object.entries(merged)) out[name] = makeCurve(L, name, ids as string[]);
+    // demo street lanes carry no chain — they exist purely to put traffic on
+    // the road (their waypoints are already routed over the road graph)
+    for (const name of handLanes) if (!out[name]) out[name] = makeCurve(L, name, []);
     return out;
-  }, [merged, L]);
+  }, [merged, handLanes, L]);
+
+  /** Ambient traffic: the curated demo lanes first, then derived flows — a
+   *  JSON-driven city must still have cars, and every one of these curves is
+   *  routed over the real road graph, never across a lawn. */
+  const ambientKeys = useMemo(() => {
+    const hand = handLanes.filter((k) => !!curves[k]);
+    const derived = Object.keys(merged)
+      .filter((k) => !hand.includes(k) && !!curves[k])
+      .sort();
+    return [...hand, ...derived].slice(0, 6);
+  }, [handLanes, merged, curves]);
 
   // followTarget ghost fix: deactivate when this layer unmounts
   useEffect(() => () => { followTarget.active = false; }, []);
 
+  // safety: a mission whose curve can't be built would strand the HUD in
+  // "mission active" forever — end it immediately instead (and say why)
+  useEffect(() => {
+    if (mission && !curves[mission.flow]) {
+      useCity.getState().notify("⚠ No drivable road for this flow — the courier stays in the garage rather than cutting across the grass", undefined, "error");
+      endMission();
+    }
+  }, [mission, curves, endMission]);
+
   const failB = failingId ? L.byId.get(failingId) : L.byId.get("be-payctrl");
+  // a JWT-blocked mission keeps the barrier DOWN for the whole halt
+  const jwtBlocked = !!mission?.blocked;
   return (
     <group>
-      <TollGate x={L.toll.x} z={L.toll.z} lanes={[...L.toll.lanes]} open={!failing} />
-      {traffic && <>
-        {curves.login && <Car curve={curves.login} offset={0.1} hero />}
-        {curves.login && <Car curve={curves.login} offset={0.6} color="#38bdf8" />}
-        {curves.payment && <Car curve={curves.payment} offset={0.3} stuck={failing} color={failing ? "#ef4444" : "#facc15"} />}
-        {curves.cart && <Car curve={curves.cart} offset={0.75} latencyKey="medium" />}
-        {curves.payment && <Truck curve={curves.payment} offset={0.45} />}
-        {curves.cart && <Truck curve={curves.cart} offset={0.15} />}
-      </>}
+      <TollGate x={L.toll.x} z={L.toll.z} lanes={[...L.toll.lanes]} open={!failing && !jwtBlocked} />
+      {traffic && ambientKeys.map((k, i) => {
+        const c = curves[k];
+        if (!c) return null;
+        if (i % 3 === 2) return <Truck key={k} curve={c} offset={i * 0.37} />;
+        return (
+          <Car
+            key={k}
+            curve={c}
+            offset={0.1 + i * 0.23}
+            hero={i === 0}
+            // the incident building is a payments controller — hold its courier
+            // at the kerb while the city is failing
+            stuck={failing && /pay/i.test(k)}
+            latencyKey={i === 3 ? "medium" : undefined}
+            color={i === 0 ? undefined : AMBIENT_COLORS[i % AMBIENT_COLORS.length]}
+          />
+        );
+      })}
       {/* the dispatched request itself — slow courier with floating detail cards */}
       {mission && curves[mission.flow] && (
         <MissionCar

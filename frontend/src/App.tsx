@@ -8,7 +8,7 @@ const HUD = lazy(() =>
 import { CommandPalette, type PaletteItem } from "./components/ui/CommandPalette";
 import { AuthModal } from "./components/AuthModal";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { completeOauthFromUrl, oauthCallbackApi, useAuth } from "./lib/auth";
+import { completeOauthFromUrl, ensureSession, oauthCallbackApi, useAuth } from "./lib/auth";
 import { togglePalette, useUi } from "./store/useUi";
 import { CursorGlow, Noise } from "./components/ui/effects";
 
@@ -35,8 +35,9 @@ export default function App() {
   }, []);
 
   const launch = useCallback(() => {
-    // auth gate — first visit asks you to create an account
-    if (!useAuth.getState().token) {
+    // auth gate — a refresh token counts as signed in: ensureSession() will
+    // mint the access token on boot, so we never bounce a real user to login
+    if (!useAuth.getState().token && !useAuth.getState().refreshToken) {
       sessionStorage.setItem("cc-auth-intent", "app");
       openAuth();
       return;
@@ -44,6 +45,15 @@ export default function App() {
     location.hash = "#app";
     setView("app");
   }, [openAuth]);
+
+  // ── BOOT SESSION ────────────────────────────────────────────────────────
+  // Restore a live access token BEFORE the first API call (the repo auto-load
+  // fires on a 0 ms timeout, so this gates it). Without this, a cold tab with
+  // only a refresh token sends its first request header-less and the user sees
+  // the backend's raw "Missing bearer token" — the worst possible first paint.
+  useEffect(() => {
+    void ensureSession();
+  }, []);
 
   // warm the 3D chunk on intent (hover/focus) and during idle — city opens instantly
   const preloadCity = useCallback(() => {
@@ -109,8 +119,6 @@ export default function App() {
           ]
         : [
             { id: "home", label: "Back to landing page", run: home },
-            { id: "login", label: "Run Login flow", hint: "follow-cam", run: () => window.dispatchEvent(new CustomEvent("cc-run-login")) },
-            { id: "fail", label: "Fail the payment service", hint: "demo error", run: () => window.dispatchEvent(new CustomEvent("cc-fail-payment")) },
           ],
     [view, launch, home],
   );
@@ -119,7 +127,10 @@ export default function App() {
   const user = useAuth((s) => s.user);
   const appPaletteExtras = useMemo<PaletteItem[]>(() => {
     if (view !== "app") return [];
-    const extras: PaletteItem[] = [];
+    const extras: PaletteItem[] = [
+      { id: "menu", label: "Open menu", hint: "build · search · view · panels", run: () => useUi.setState({ menuOpen: true }) },
+      { id: "reqflow", label: "Request flow", hint: "trace requests through the city", run: () => useUi.setState((s) => ({ hiddenPanels: { ...s.hiddenPanels, apis: false } })) },
+    ];
     if (user) {
       extras.push({ id: "whoami", label: `Signed in as ${user.name}`, hint: user.email, run: () => {} });
       extras.push({ id: "signout", label: "Sign out", run: signOut });
@@ -141,12 +152,6 @@ export default function App() {
           <ErrorBoundary>
             <HUD />
           </ErrorBoundary>
-          <button
-            onClick={home}
-            className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 translate-y-[64px] rounded-full border border-white/10 bg-slate-900/70 px-3 py-1 font-mono text-[10px] text-slate-400 backdrop-blur transition-colors hover:text-cyan-300"
-          >
-            ← back to site
-          </button>
         </div>
       ) : (
         <Landing onLaunch={launch} onLaunchIntent={preloadCity} />

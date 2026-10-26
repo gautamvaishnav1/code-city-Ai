@@ -104,18 +104,67 @@ export function generateHeuristic(m: ProjectMetadata): Architecture {
     }
   };
 
-  // frontend?
+  // frontend? — split into ONE COMPONENT PER UI SURFACE so the Frontend
+  // district is a real neighbourhood of buildings (a screen you can point at)
+  // instead of a single monolithic "Frontend App" block.
   const componentFiles = m.files.filter((f) => f.role === "component");
   const hasFrontend =
     componentFiles.length > 0 ||
     Object.keys({ ...m.dependencies }).some((d) => ["react", "vue", "svelte", "@angular/core"].includes(d));
-  const frontendId = add(
-    "frontend",
-    "Frontend App",
-    "frontend",
-    `${componentFiles.length} UI component file(s) rendering the user interface.`,
-    componentFiles.slice(0, 8).map((f) => f.path)
-  );
+  /** every frontend component we emit — routes are linked from ALL of them */
+  const frontendIds: string[] = [];
+
+  /** screen/route-group key + a human label ("pages · Login") */
+  const uiGroupOf = (filePath: string): { key: string; label: string } => {
+    const parts = filePath.replace(/\\/g, "/").split("/");
+    const stem = (parts[parts.length - 1] ?? "").replace(/\.(jsx?|tsx?|vue|svelte)$/i, "") || "app";
+    const dir = parts.slice(0, -1);
+    const folder = dir.find((p) =>
+      ["pages", "views", "screens", "routes", "features", "components", "ui", "layouts"].includes(
+        p.toLowerCase()
+      )
+    );
+    return {
+      key: slug(folder ? `${folder}-${stem}` : stem),
+      label: folder ? `${cap(folder)} · ${stem}` : cap(stem)
+    };
+  };
+
+  if (componentFiles.length > 0) {
+    const groups = new Map<string, { label: string; files: string[] }>();
+    for (const f of componentFiles) {
+      const g = uiGroupOf(f.path);
+      const cur = groups.get(g.key) ?? { label: g.label, files: [] };
+      if (cur.files.length < 6) cur.files.push(f.path);
+      groups.set(g.key, cur);
+    }
+    const entries = [...groups.entries()].slice(0, 10);
+    for (const [key, g] of entries) {
+      frontendIds.push(
+        add(
+          key,
+          g.label,
+          "frontend",
+          `UI surface rendering part of the client app (${g.files.length} file(s)).`,
+          g.files
+        )
+      );
+    }
+    // anything past the 10-group cap still belongs to the app, not to nowhere
+    if (groups.size > entries.length) {
+      const extra = [...groups.entries()]
+        .slice(entries.length)
+        .flatMap(([, g]) => g.files)
+        .slice(0, 6);
+      const first = frontendIds[0];
+      const target = components.get(first);
+      if (target) for (const f of extra) if (!target.files.includes(f)) target.files.push(f);
+    }
+  } else if (hasFrontend) {
+    frontendIds.push(
+      add("frontend", "Frontend App", "frontend", "Client application rendering the user interface.", [])
+    );
+  }
 
   // group by feature derived from file names (auth.routes.ts -> "auth")
   const featureOf = (filePath?: string): string => {
@@ -150,7 +199,7 @@ export function generateHeuristic(m: ProjectMetadata): Architecture {
       `HTTP endpoints for ${feature} (${route.method} ${route.path}, ...).`,
       [route.file]
     );
-    link(frontendId, routesId, "sends requests");
+    for (const fid of frontendIds) link(fid, routesId, "sends requests");
 
     const controllerEntry = m.controllers.find((c) => c.name === route.handler);
     const controllerName = controllerEntry?.name ?? route.handler.split(".")[0];

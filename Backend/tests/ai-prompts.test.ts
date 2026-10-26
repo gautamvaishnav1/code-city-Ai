@@ -22,6 +22,26 @@ function meta(over: Partial<ProjectMetadata> = {}): ProjectMetadata {
       totalModels: 0,
       durationMs: 5
     },
+    syntax: {
+      es6PlusFiles: 1,
+      totalFiles: 1,
+      arrowFunctions: 1,
+      asyncAwait: 0,
+      templateLiterals: 0,
+      destructuring: 0,
+      classes: 0,
+      modules: 1
+    },
+    signals: {
+      processEnvUsage: 0,
+      consoleErrorCalls: 0,
+      consoleWarnCalls: 0,
+      consoleLogCalls: 0,
+      awaitCalls: 0,
+      swallowedErrors: 0,
+      requireCalls: 0,
+      cjsExports: 0
+    },
     dependencies: { express: "^4" },
     devDependencies: {},
     files: [{ path: "index.ts", bytes: 256, lines: 10, role: "entry" }],
@@ -47,30 +67,27 @@ function meta(over: Partial<ProjectMetadata> = {}): ProjectMetadata {
 }
 
 describe("compactMetadataForPrompt", () => {
-  it("emits parseable JSON carrying project/stats/auth info", () => {
-    const json = compactMetadataForPrompt(meta());
-    const parsed = JSON.parse(json);
+  it("emits line-oriented summary carrying project/stats/auth info", () => {
+    const text = compactMetadataForPrompt(meta());
 
-    expect(parsed.project.name).toBe("demo");
-    expect(parsed.stats.durationMs).toBe(5);
-    expect(Array.isArray(parsed.dependencies)).toBe(true);
-    expect(parsed.dependencies).toEqual(["express"]);
-    expect(parsed.authIndicators).toHaveProperty("jwtLibraryUsed", false);
+    expect(text).toContain("REPO:demo");
+    expect(text).toContain("FILES:1");
+    expect(text).toContain("DEPS:express");
+    expect(text).toContain("AUTH:jwt=false");
   });
 
-  it("summarizes dependencies as name lists with caps", () => {
+  it("summarizes dependencies as name list with cap", () => {
     const deps: Record<string, string> = {};
     for (let i = 0; i < 80; i++) deps[`pkg-${i}`] = "1.0.0";
-    const devDeps: Record<string, string> = {};
-    for (let i = 0; i < 50; i++) devDeps[`dev-${i}`] = "1.0.0";
 
-    const parsed = JSON.parse(compactMetadataForPrompt(meta({ dependencies: deps, devDependencies: devDeps })));
-
-    expect(parsed.dependencies).toHaveLength(60);
-    expect(parsed.devDependencies).toHaveLength(40);
+    const text = compactMetadataForPrompt(meta({ dependencies: deps }));
+    const depsLine = text.split("\n").find((l) => l.startsWith("DEPS:"));
+    expect(depsLine).toBeDefined();
+    const names = depsLine!.slice(5).split(",");
+    expect(names.length).toBeLessThanOrEqual(50);
   });
 
-  it("caps routes/models/classes/imports samples", () => {
+  it("caps routes/models/imports samples", () => {
     const m = meta({
       routes: Array.from({ length: 100 }, (_, i) => ({
         method: "GET" as const,
@@ -91,10 +108,14 @@ describe("compactMetadataForPrompt", () => {
       }))
     });
 
-    const parsed = JSON.parse(compactMetadataForPrompt(m));
-    expect(parsed.routes).toHaveLength(80);
-    expect(parsed.models).toHaveLength(40);
-    expect(parsed.sampleImports).toHaveLength(50);
+    const text = compactMetadataForPrompt(m);
+    const routesLine = text.split("\n").find((l) => l.startsWith("ROUTES:"));
+    const modelsLine = text.split("\n").find((l) => l.startsWith("MODELS:"));
+    const importsLine = text.split("\n").find((l) => l.startsWith("IMPORTS:"));
+
+    expect(routesLine!.split(" | ").length).toBeLessThanOrEqual(60);
+    expect(modelsLine!.split(" | ").length).toBeLessThanOrEqual(30);
+    expect(importsLine!.slice(8).split(",").length).toBeLessThanOrEqual(40);
   });
 
   it("counts filesByRole", () => {
@@ -105,12 +126,12 @@ describe("compactMetadataForPrompt", () => {
         { path: "e.ts", bytes: 30, lines: 3, role: "entry" }
       ]
     });
-    const parsed = JSON.parse(compactMetadataForPrompt(m));
-    expect(parsed.filesByRole).toEqual({ service: 2, entry: 1 });
+    const text = compactMetadataForPrompt(m);
+    expect(text).toContain("ROLES:service:2,entry:1");
   });
 
-  it("truncates oversized payloads to the hard budget with a marker suffix", () => {
-    const longPath = "/".concat("segment-".repeat(40), Math.random().toString());
+  it("truncates oversized payloads to the hard budget with a marker", () => {
+    const longPath = "/".concat("segment-".repeat(100), Math.random().toString());
     const m = meta({
       routes: Array.from({ length: 200 }, (_, i) => ({
         method: "POST" as const,
@@ -120,17 +141,52 @@ describe("compactMetadataForPrompt", () => {
       }))
     });
 
-    const json = compactMetadataForPrompt(m);
-    expect(json.length).toBeLessThanOrEqual(45_000 + 20); // budget + small suffix
-    expect(json.endsWith('"TRUNCATED"}')).toBe(true);
+    const text = compactMetadataForPrompt(m);
+    expect(text.length).toBeLessThanOrEqual(32_000 + 30);
+    expect(text).toContain("TRUNCATED");
   });
 
   it("never emits raw AST keys in the payload", () => {
-    const payload = JSON.parse(compactMetadataForPrompt(meta()));
-    for (const key of Object.keys(payload)) {
-      expect(key.toLowerCase()).not.toContain("ast");
-    }
-    expect(payload).not.toHaveProperty("functions"); // trimmed out of prompt shape? (kept only in metadata)
+    const text = compactMetadataForPrompt(meta());
+    expect(text).not.toContain('"ast"');
+    expect(text).not.toContain('"type":"File"');
+    expect(text).not.toContain('"loc"');
+  });
+
+  it("includes ES6+ syntax signals when present", () => {
+    const m = meta({
+      syntax: {
+        es6PlusFiles: 10,
+        totalFiles: 12,
+        arrowFunctions: 10,
+        asyncAwait: 5,
+        templateLiterals: 3,
+        destructuring: 2,
+        classes: 4,
+        modules: 11
+      }
+    });
+    const text = compactMetadataForPrompt(m);
+    expect(text).toContain("ES6+:10/12");
+    expect(text).toContain("ARROW:10");
+    expect(text).toContain("ASYNC:5");
+  });
+
+  it("includes runtime signals when present", () => {
+    const m = meta({
+      signals: {
+        processEnvUsage: 8,
+        consoleErrorCalls: 3,
+        consoleWarnCalls: 1,
+        consoleLogCalls: 12,
+        awaitCalls: 20,
+        swallowedErrors: 2,
+        requireCalls: 5,
+        cjsExports: 4
+      }
+    });
+    const text = compactMetadataForPrompt(m);
+    expect(text).toContain("SIG:await=20 env=8 cerr=3 swallowed=2 require=5 cjs=4");
   });
 });
 
@@ -146,7 +202,7 @@ describe("prompt constants", () => {
     expect(CHAT_SYSTEM_PROMPT).toContain("PATH:");
   });
 
-  it("architectUserPrompt embeds the metadata JSON after an instruction line", () => {
+  it("architectUserPrompt embeds the summary after an instruction line", () => {
     const inner = compactMetadataForPrompt(meta());
     const prompt = architectUserPrompt(inner);
     expect(prompt.startsWith("Analyze this codebase summary")).toBe(true);

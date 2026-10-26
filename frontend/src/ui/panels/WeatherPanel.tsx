@@ -11,9 +11,11 @@ import {
 } from "lucide-react";
 import { setAudioEnabled } from "../../three/audio";
 import { useCity } from "../../store/useCity";
+import { DraggablePanel } from "../DraggablePanel";
 
-/* ── atmosphere panel (weather · time · sound). weather now MEANS something:
-      clear = healthy build · drizzle = warnings · rain/storm = errors / slow API ── */
+/* ── atmosphere panel (weather · time · sound) — HIDDEN by default (UX
+      review); reopen from ☰ MENU → Panels → Atmosphere. weather now MEANS
+      something: clear = healthy · drizzle = warnings · rain/storm = errors ── */
 export function WeatherPanel() {
   // granular selectors — this panel must NOT re-render on every time tick
   const weather = useCity((s) => s.weather);
@@ -46,8 +48,18 @@ export function WeatherPanel() {
           ? "DRIZZLE — WARNINGS PRESENT"
           : "CLEAR — ALL SYSTEMS HEALTHY";
 
+  // total-minutes math — independent rounding used to show "23:60"
+  const mins = Math.round(time * 60);
+  const hh = String(Math.floor(mins / 60) % 24).padStart(2, "0");
+  const mm = String(mins % 60).padStart(2, "0");
+
   return (
-    <div className="pointer-events-auto w-52 self-end rounded-none border-[1.5px] border-black-ink bg-paper/95 p-3 max-lg:hidden">
+    <DraggablePanel
+      id="weather"
+      className="pointer-events-auto fixed left-1/2 top-1/2 z-40 w-[min(92vw,232px)] -translate-x-1/2 -translate-y-1/2"
+      resizable={false}
+    >
+      <div className="pointer-events-auto w-full rounded-xl border-[1.5px] border-black-ink bg-paper/95 p-3 shadow-[4px_4px_0_rgba(0,0,0,.3)]">
       <div className="caption-caps mb-2 flex items-baseline justify-between gap-2 font-bold">
         <span className="shrink-0">ATMOSPHERE</span>
         <span className="truncate text-right text-[9px] text-black-ink/70">{meaning}</span>
@@ -92,8 +104,8 @@ export function WeatherPanel() {
         {sound ? "Sound on" : "Sound off"}
       </button>
       <div className="mt-3 flex items-center gap-2 text-xs text-black-ink/70">
-        <span>
-          {String(Math.floor(time)).padStart(2, "0")}:{String(Math.round((time % 1) * 60)).padStart(2, "0")}
+        <span className="tabular-nums">
+          {hh}:{mm}
         </span>
         <input
           type="range"
@@ -110,6 +122,7 @@ export function WeatherPanel() {
         <input type="checkbox" checked={autoCycle} onChange={(e) => patch({ autoCycle: e.target.checked })} className="accent-signal" />
         Auto day–night cycle
       </label>
-    </div>
+      </div>
+    </DraggablePanel>
   );
 }

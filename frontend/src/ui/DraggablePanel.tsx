@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useUi } from "../store/useUi";
 
 type Saved = { x: number; y: number; w: number; h: number };
 
@@ -31,7 +32,9 @@ function loadSaved(id: string): Saved | null {
  * - Docked (default): renders children inside the original layout classes.
  * - Free: once dragged, the panel becomes fixed-positioned where the user put it;
  *   position + size persist in localStorage across reloads.
- * - Drag via the ⠿ grip, or any child marked with a `data-drag` attribute (panel headers).
+ * - Drag via the ⠿ grip (visible on touch too), or any child marked with a
+ *   `data-drag` attribute (panel headers).
+ * - ✕ close button (popup style) hides the panel — reopen from the VIEW menu.
  * - Resize via the ◢ corner handle (free mode).
  * - Double-click the grip to dock the panel back to its original spot.
  * - Window event "cc-panels-reset" docks every panel back.
@@ -65,6 +68,9 @@ export function DraggablePanel({
       h: s?.h ?? 200,
     };
   });
+  // popup-style close: ✕ hides the panel (reopen from the VIEW menu)
+  const hidden = useUi((s) => !!s.hiddenPanels[id]);
+  const hidePanel = useUi((s) => s.hidePanel);
   const ref = useRef<HTMLDivElement>(null);
   const boxRef = useRef(box);
   const freeRef = useRef(free);
@@ -100,6 +106,8 @@ export function DraggablePanel({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [free]);
+
+  if (hidden) return null;
 
   const save = () => {
     const r = ref.current?.getBoundingClientRect();
@@ -196,10 +204,21 @@ export function DraggablePanel({
       onPointerDown={startDrag}
       onDoubleClick={reset}
       title="Drag to move · double-click to dock back"
-      className="pointer-events-none absolute -left-2.5 -top-2.5 z-50 grid h-6 w-6 cursor-move select-none place-items-center rounded-full border-[1.5px] border-black-ink bg-paper text-[11px] leading-none text-black-ink/60 opacity-0 shadow-[2px_2px_0_rgba(0,0,0,.3)] transition-opacity group-hover/dp:pointer-events-auto group-hover/dp:opacity-100 touch-none"
+      className="pointer-events-none absolute -left-2.5 -top-2.5 z-50 grid h-6 w-6 cursor-move select-none place-items-center rounded-full border-[1.5px] border-black-ink bg-paper text-[11px] leading-none text-black-ink/60 opacity-40 shadow-[2px_2px_0_rgba(0,0,0,.3)] transition-opacity group-hover/dp:pointer-events-auto group-hover/dp:opacity-100 touch-none"
     >
       ⠿
     </span>
+  );
+
+  const closeBtn = (
+    <button
+      onClick={() => hidePanel(id)}
+      title="Close panel — reopen it from the VIEW menu"
+      aria-label="Close panel"
+      className="pointer-events-auto absolute -right-2.5 -top-2.5 z-50 grid h-6 w-6 place-items-center rounded-full border-[1.5px] border-black-ink bg-paper text-[11px] leading-none text-black-ink/55 opacity-85 shadow-[2px_2px_0_rgba(0,0,0,.3)] transition-colors hover:border-signal hover:text-signal"
+    >
+      ✕
+    </button>
   );
 
   if (!free) {
@@ -208,6 +227,7 @@ export function DraggablePanel({
       <div ref={ref} onPointerDown={onWrapperPointerDown} className={`group/dp ${pos} ${className}`.trim()}>
         {children}
         {grip}
+        {closeBtn}
       </div>
     );
   }
@@ -222,6 +242,7 @@ export function DraggablePanel({
       {/* scroll container is INSIDE so the grip/resize handles never get clipped */}
       <div className="pointer-events-auto h-full w-full overflow-auto">{children}</div>
       {grip}
+      {closeBtn}
       {resizable && (
         <span
           onPointerDown={startResize}

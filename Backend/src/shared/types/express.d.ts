@@ -4,6 +4,8 @@ declare global {
       user?: {
         id: string;
         email: string;
+        /** true for anonymous demo sessions — see requireDemoForGuest */
+        guest?: boolean;
       };
     }
   }

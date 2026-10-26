@@ -250,3 +250,100 @@ from one constant shared by both effects.
 
 *Companion doc: [`IMPROVEMENTS.md`](IMPROVEMENTS.md) covers the 3D world (traffic speed,
 building overlap, labels, world cohesion).*
+
+---
+
+## ✅ Resolved / superseded — 2026-10 UX overhaul
+
+| Finding | Status | How |
+|---|---|---|
+| **2** — Enter double-fire (`runLogin` on Enter) | **Fixed** | The global Enter → run-login shortcut and the synthetic `runDemoEvents` bridge were deleted (`src/ui/shortcuts.ts`); the `RUN LOGIN` button no longer exists, so one keypress can never dispatch two actions. |
+| **3** — Fake analysis progress percentages | **Fixed properly** | The frontend now listens to the backend's real `analysis:progress` Socket.IO stream (`src/lib/progressSocket.ts` → `project:join` room, step + percent emitted by `analysis.pipeline.ts`). The poll loop no longer fabricates `Math.min(99, i*4)`; when the socket is unavailable the BUILD button shows an honest indeterminate `BUILDING…` with no number. Dev vite proxy forwards `/socket.io` (ws). |
+| **11** — Dead `failB ? undefined : undefined` | **Fixed** | Deleted with the FAIL PAYMENT button. |
+| **Related** — `BUILD… ${progress ?? 0}%` title showed a fake `0%` | **Fixed** | `src/ui/HUD.tsx` title only shows a percent when a real one exists. |
+
+### Changes from this pass (new behavior)
+
+- **Bottlenecks are now real and clickable.** The telemetry HEALTH card shows the
+  backend's actual `stats.healthScore` (per-building complexity → `health` derived in
+  `lib/city.ts`, thresholds ≥60 error / ≥40 warn — matching the backend's ≥60 bottleneck
+  rule). The **BOTTLENECKS** card toggles `ui/panels/BottlenecksPanel.tsx`: critical and
+  elevated sections sorted by complexity, click a row → fly camera + select. The health
+  event feed only surfaces `error` severity (warns live in the panel, not as alert spam).
+- **Top bar reduced to its one job.** Repo input → `BUILD CITY` with live % → profile
+  chip + logout. Traffic / Pipes / Links / Follow moved into a **View** popover
+  (`ViewMenu`, aria `menuitemcheckbox`, includes `Reset panel layout`). Project chip and
+  demo/traffic toggle clutter removed.
+- **RUN LOGIN / FAIL PAYMENT demo buttons removed** (bottom bar keeps Latency +
+  SHOWCASE); matching CommandPalette entries deleted.
+- **No preloaded fake city.** App boots to `EMPTY_CITY` (`store/useCity.ts`); a centered
+  empty-state card explains the flow and offers the Beach Resort demo. The right rail is
+  hidden until a city exists (it's full-width on mobile and would cover the card — audit
+  16 note: rail content is city-dependent anyway). All scene systems verified empty-safe
+  (People `i % 0` guard, CameraRig origin default, Traffic curve guards,
+  Minimap/Legend/ApiWorkflows loops).
+- **Post-build CTA.** After any successful build/cache-hit, the right rail shows a
+  dismissible **“HOW CAN I IMPROVE YOUR SYSTEM?”** card (`guideCta` state) → opens the
+  AI Improvement Guide.
+- **Mobile.** Logo wordmark hidden `< sm`, top bar wraps (search full-width row),
+  telemetry + right rail drop to `top-32` until `lg`, stats grid 2→3 cols, all new
+  controls touch-sized with `min-h` and no hover-only affordances (audit 17 note: drag
+  grips still hover-gated — open).
+
+### Still open (unchanged)
+
+Findings **1** (mission strip vs bottom controls — reduced but Latency/SHOWCASE still
+centered), **4** (no cancel on a 3-min analysis), **5–10**, **12–19** and the polish
+table remain as written above.
+
+---
+
+## ✅ Resolved / superseded — 2026-10 ☰ menu restructure (HUD → "3D city + ☰")
+
+| Finding | Status | How |
+|---|---|---|
+| **1** — MissionStrip vs bottom controls | **Superseded** | The bottom bar (Latency / SHOWCASE / RUN buttons) was removed in the previous pass; the strip now owns `bottom-4` alone. Notifications lift to `max-md:bottom-44` so a mission never covers them on mobile. |
+| **10** — Duplicate "Links" spans | **Superseded** | The control group they lived in was deleted with the rail/bottom bar; Links is a menu row now. |
+| **15** — Off-brand "← back to site" button | **Fixed** | Deleted from `src/App.tsx`; the menu's 🏙 Landing row is the way home (logo + palette remain too). |
+| **16** — Guide launcher magic pixel offsets | **Fixed** | The launcher no longer exists; the AI Improvement Guide opens from ☰ MENU → Actions, from the post-build CTA card, and from the inspector's "Ask the AI architect" shortcut — all store-driven, no hardcoded pixels, available on every breakpoint. |
+| **17** — Drag grips invisible on touch | **Fixed** | Grip baseline is `opacity-40` (full on hover) in `src/ui/DraggablePanel.tsx`. |
+| **19** — Minimap dead band / click offset | **Superseded** | **City Plan (Minimap) removed entirely** — panel usage deleted from the HUD and `src/ui/panels/Minimap.tsx` deleted. |
+| **22** — Inspector nested scrollbars | **Superseded** | The rail (the outer scrollbar) is gone; the inspector is a standalone draggable panel. |
+| **28** — Reset layout unreachable on mobile | **Fixed** | Reset lives in ☰ MENU → Panels → **Reset layout**, reachable at every breakpoint (and `cc-panels-reset` still resets positions). |
+
+### Changes from this pass
+
+- **Clean-city architecture.** After a build the screen shows only the 3D city plus a
+  **☰ MENU** cluster and a **REQUEST FLOW** button (`src/ui/HUD.tsx` + `src/ui/Mainmenu.tsx`).
+  The rail, bottom bar, top-bar search and ViewMenu are gone. The ☰ dropdown holds every
+  feature: **Build** (inline `RepoLoader`, auto-closes on build start/finish), **Search**
+  (`CitySearch`, `/` opens the menu and focuses it), **View** (traffic / pipes / links /
+  follow / showcase + live latency), **Panels** (telemetry, request flow, guide, legend,
+  console, atmosphere, notifications + Reset layout), **Actions** (Request flow, Ask the AI
+  architect), **Account** (UserChip, 🏙 Landing). Outside-click / Esc / ✕ close it.
+- **Every draggable panel now closes like a popup.** `DraggablePanel` gained a ✕ close
+  (store: `useUi.hiddenPanels` / `hidePanel`, defaults in `DEFAULT_HIDDEN`) and a visible
+  grip. Panels reopen from the menu. Double-toggled panels unified to the store:
+  LegendPanel and LogPanel lost their internal open/close state (menu opens content directly).
+- **ATMOSPHERE hidden by default** (`weather` in `DEFAULT_HIDDEN`); the WeatherPanel is a
+  centered draggable popup reopenable from the menu, with the `23:60` clock bug fixed
+  (total-minutes math).
+- **Request flow = visualization only, styled as a menu dropdown.** The REQUEST FLOW button
+  opens the **same dropdown pattern as the ☰ MENU** (`src/ui/panels/ApiWorkflows.tsx`:
+  paper card, `caption-caps` header + ✕, `min-h-[36px]` menu rows, outside-click/Esc close,
+  sections “Curated flows” / “Derived from repo”) instead of a floating dialog. The caption
+  says “Trace only — no live call is sent”; TRACE dispatches the courier mission
+  (`dispatchMission` — pure state, no HTTP) and closes the dropdown so the city view is
+  clear. Auth/login, payment, cart, signup and every derived repo route are listed;
+  `autoSpec` in `src/three/Traffic.tsx` synthesizes per-component hops (dispatch → each
+  building → 200 OK) so any flow shows the full journey. A safety effect ends missions
+  whose curve can't be built. `anyOverlayOpen()` includes the dropdown, so keyboard
+  shortcuts stand down while it's open.
+- **HUD split** into `RepoLoader`, `UserChip`, `CitySearch`, `MainMenu` (extracted from the
+  1000-line HUD). `/` shortcut opens the menu first (`shortcuts.ts`); `anyOverlayOpen()`
+  includes `menuOpen` so other shortcuts stand down while it's open.
+- **Responsive.** Popup panels use viewport-clamped widths (`w-[min(94vw,…)]`), notifications
+  reposition above the mission strip on mobile, the telemetry column sits at `top-32` below
+  `lg`, and the command palette gained **Open menu** / **Request flow** entries.
+- Verified: `npm run build` + `npm run lint` green after the restructure.
+
