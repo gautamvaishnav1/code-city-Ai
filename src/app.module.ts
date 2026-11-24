@@ -14,6 +14,8 @@ import { TokenModule } from './token/token.module.js';
 import { validate } from './config/env.config.js';
 import { AnalysisService } from './analysis/analysis.service.js';
 import { AnalysisModule } from './analysis/analysis.module.js';
+import { AnalysisModule } from './analysis/analysis.module.js';
+import { AnalysisModule } from './analysis/analysis.module.js';
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({

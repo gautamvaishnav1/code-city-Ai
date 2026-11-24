@@ -2,7 +2,9 @@
 /dist
 /node_modules
 /build
-
+/demo
+/repos
+/temp
 # Logs
 logs
 *.log
