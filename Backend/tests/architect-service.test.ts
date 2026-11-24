@@ -83,12 +83,17 @@ describe("generateHeuristic — component synthesis rules", () => {
     expect(arch.components.some((c) => c.id === "frontend")).toBe(true);
   });
 
-  it("attaches UI component file paths to the frontend node", () => {
+  it("attaches UI component file paths to a frontend node", () => {
     const m = meta();
     m.files.push({ path: "src/ui/Button.tsx", bytes: 300, lines: 12, role: "component" });
     const arch = generateHeuristic(m);
-    const frontend = arch.components.find((c) => c.id === "frontend")!;
-    expect(frontend.files).toContain("src/ui/Button.tsx");
+    // the frontend is now split into one component per UI surface, so the file
+    // lands on the surface that owns it instead of a monolithic "frontend" node
+    const surface = arch.components.find(
+      (c) => c.type === "frontend" && (c.files ?? []).includes("src/ui/Button.tsx")
+    );
+    expect(surface).toBeDefined();
+    expect(surface!.id).not.toBe("server-app");
   });
 
   it("groups routes and controllers per feature (auth, order)", () => {
@@ -134,7 +139,9 @@ describe("generateHeuristic — component synthesis rules", () => {
       controllers: [],
       services: [],
       models: [],
-      dependencies: {}
+      // no backend signals at all, but the project HAS a UI — that is enough
+      // for the frontend node to be synthesized
+      dependencies: { react: "^18" }
     };
     const arch = generateHeuristic(empty);
 
@@ -142,6 +149,25 @@ describe("generateHeuristic — component synthesis rules", () => {
     expect(ids).toEqual(expect.arrayContaining(["frontend", "server-app"]));
     expect(ids).not.toContain("core-codebase"); // frontend/server-app are always synthesized
     // chain fallback keeps the graph connected
+    expect(arch.connections.length).toBeGreaterThan(0);
+    expect(arch.connections[0].label).toBe("relates to");
+  });
+
+  it("falls back to core-codebase when NOTHING but the entry file is detected", () => {
+    const blank: ProjectMetadata = {
+      ...meta(),
+      routes: [],
+      controllers: [],
+      services: [],
+      models: [],
+      dependencies: {}
+    };
+    const arch = generateHeuristic(blank);
+
+    const ids = arch.components.map((c) => c.id);
+    // no UI signals → no phantom "Frontend App"; the scanned code is shown as
+    // one extra component instead of leaving a single orphan node
+    expect(ids).toEqual(["server-app", "core-codebase"]);
     expect(arch.connections.length).toBeGreaterThan(0);
     expect(arch.connections[0].label).toBe("relates to");
   });

@@ -4,6 +4,9 @@
 
 For the full developer handbook see [`DOCUMENTATION.md`](./DOCUMENTATION.md).
 
+For the exact JSON shape of a repo analysis — every endpoint, every field, with a real
+captured payload — see [`ANALYSIS-JSON.md`](./ANALYSIS-JSON.md).
+
 ---
 
 ## Table of contents

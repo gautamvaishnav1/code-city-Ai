@@ -59,9 +59,11 @@ export function RecentProjects({ onPicked }: { onPicked?: () => void }) {
   const token = useAuth((s) => s.token);
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
       const minted = await ensureSession();
+      // first setState comes after an await, so the effect below never sets
+      // state synchronously (react-hooks rule: no cascading renders)
+      setLoading(true);
       // No session at all → don't fire a request we already know answers 401
       // (two console errors on every anonymous visit). The signed-out visitor
       // just sees the empty state, and the list loads the moment a session
@@ -87,7 +89,15 @@ export function RecentProjects({ onPicked }: { onPicked?: () => void }) {
   }, []);
 
   useEffect(() => {
-    void load();
+    // one microtask out: the load itself already awaits, and the rule still
+    // treats a direct call as "setState in the effect body"
+    let alive = true;
+    queueMicrotask(() => {
+      if (alive) void load();
+    });
+    return () => {
+      alive = false;
+    };
   }, [load, token]);
 
   const open = useCallback(

@@ -119,11 +119,18 @@ describe("normalizeArchitecture (edge cases)", () => {
 
   it("defaults empty description to undefined and normalizes type separators", () => {
     const arch = normalizeArchitecture({
-      components: [{ name: "X", type: "Third Party API" }],
+      components: [
+        { name: "X", type: "Third Party API" },
+        { name: "Y", type: "Some Cool Thing" }
+      ],
       connections: []
     });
     expect(arch.components[0].description).toBeUndefined();
-    expect(arch.components[0].type).toBe("third_party_api");
+    // third-party synonyms collapse into the single `external` canonical type
+    // (TYPE_ALIASES), which is what the district mapping keys off
+    expect(arch.components[0].type).toBe("external");
+    // unknown multi-word types only get their separators normalized
+    expect(arch.components[1].type).toBe("some_cool_thing");
   });
 
   it("deduplicates identical connections but keeps distinct labels", () => {

@@ -113,7 +113,10 @@ export function District({ d }: { d: LaidDistrict }) {
   const isDb = d.stack === "database";
   // plinth size comes from the layout's slab pass (derived from the FINAL
   // building positions) so it can never swallow a road — see lib/layout.ts
-  const slab = d.slab ?? [Math.max(2, (d.ringR - 1.25) * 2), Math.max(2, (d.ringD - 1.25) * 2)];
+  const slab = useMemo(
+    () => d.slab ?? [Math.max(2, (d.ringR - 1.25) * 2), Math.max(2, (d.ringD - 1.25) * 2)],
+    [d.slab, d.ringR, d.ringD],
+  );
   // the pad, already carved around every road that crosses the district
   // (the trunk road used to run straight through the backend plinth)
   const pieces = d.slabs ?? [[-slab[0] / 2, -slab[1] / 2, slab[0], slab[1]] as [number, number, number, number]];

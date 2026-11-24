@@ -374,6 +374,9 @@ Lightweight polling endpoint.
 
 Latest completed architecture for a project, **pre-laid-out as a 3D city**: every component arrives with district, position, size and visual hints; every connection carries a typed road spec. The frontend can spawn the world without computing any layout math.
 
+> **Field-by-field reference (all 5 analysis endpoints, real captured payload, type →
+> district → building-kind tables):** [`docs/ANALYSIS-JSON.md`](../docs/ANALYSIS-JSON.md).
+
 ```json
 // no request body
 ```

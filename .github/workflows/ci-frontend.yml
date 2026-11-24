@@ -9,13 +9,23 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        # vite 8 ships rolldown, whose bundled toolchain imports
+        # `util.styleText` — that export does not exist on Node 18, so the
+        # build died with:
+        #   SyntaxError: The requested module 'node:util' does not provide
+        #   an export named 'styleText'
+        # vite's own engines field agrees: ^20.19.0 || >=22.12.0
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - working-directory: ./frontend
         run: npm install
+      - working-directory: ./frontend
+        run: npm run lint
       - working-directory: ./frontend
         run: npm run build

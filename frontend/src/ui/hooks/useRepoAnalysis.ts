@@ -35,24 +35,6 @@ export function useRepoAnalysis() {
    *  modal hands back a live session (no second click, no dead-end toast). */
   const pendingInput = useRef<string | null>(null);
 
-  // resume the moment a session appears (sign-in / OTP / OAuth all land here)
-  useEffect(() => {
-    return useAuth.subscribe((s, prev) => {
-      if (prev.token || !s.token || !pendingInput.current) return;
-      const input = pendingInput.current;
-      pendingInput.current = null;
-      void analyze(input);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // the modal was dismissed without signing in → forget the queued build
-  useEffect(() => {
-    return useUi.subscribe((s, prev) => {
-      if (prev.authOpen && !s.authOpen && !useAuth.getState().token) pendingInput.current = null;
-    });
-  }, []);
-
   const analyze = useCallback(
     async (input: string) => {
       const target = input.trim();
@@ -234,6 +216,25 @@ export function useRepoAnalysis() {
     },
     [setCity, notify, patchCity],
   );
+
+  // resume the moment a session appears (sign-in / OTP / OAuth all land here).
+  // Declared AFTER `analyze` on purpose — the callback must exist before the
+  // subscription can reference it.
+  useEffect(() => {
+    return useAuth.subscribe((s, prev) => {
+      if (prev.token || !s.token || !pendingInput.current) return;
+      const input = pendingInput.current;
+      pendingInput.current = null;
+      void analyze(input);
+    });
+  }, [analyze]);
+
+  // the modal was dismissed without signing in → forget the queued build
+  useEffect(() => {
+    return useUi.subscribe((s, prev) => {
+      if (prev.authOpen && !s.authOpen && !useAuth.getState().token) pendingInput.current = null;
+    });
+  }, []);
 
   return { busy, analyze, progress };
 }

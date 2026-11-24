@@ -10,21 +10,21 @@ export function LogPanel() {
   const token = useAuth((s) => s.token);
   /** one-time SSE ticket (EventSource cannot set an Authorization header —
    *  the backend hands out a single-use ticket instead of a long-lived JWT in
-   *  the URL). Re-minted a few times if the live connection later drops. */
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+   *  the URL). Re-minted a few times if the live connection later drops.
+   *  Stored WITH the token it was minted for so a sign-out invalidates it by
+   *  derivation instead of a synchronous setState in the effect. */
+  const [ticket, setTicket] = useState<{ token: string; url: string } | null>(null);
   const [renew, setRenew] = useState(0);
+  const streamUrl = ticket && token && ticket.token === token ? ticket.url : null;
   useEffect(() => {
-    if (!token) {
-      setStreamUrl(null);
-      return;
-    }
+    if (!token) return;
     let alive = true;
     (async () => {
       try {
         const r = await apiFetch("/logs/stream-ticket", { method: "POST" });
         const j = (await r.json()) as { data?: { streamUrl?: string } };
         const u = j?.data?.streamUrl;
-        if (alive && r.ok && typeof u === "string") setStreamUrl(u);
+        if (alive && r.ok && typeof u === "string") setTicket({ token, url: u });
       } catch {
         /* SSE is optional — the panel still shows the local buffer */
       }

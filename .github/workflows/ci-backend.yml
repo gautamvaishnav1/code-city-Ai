@@ -3,25 +3,33 @@ name: CI - Backend Tests
 on:
   push:
     branches: [main, develop]
-    paths: ['backend/**']
+    paths: ['Backend/**', '.github/workflows/ci-backend.yml']
   pull_request:
     branches: [main]
-    paths: ['backend/**']
+    paths: ['Backend/**']
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        # the repo declares engines.node >= 18, but vitest 3 / mongoose 9 and
+        # friends are only exercised on the versions we actually support in CI
+        node-version: [20.x, 22.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - working-directory: ./backend
+          cache: npm
+          cache-dependency-path: Backend/package-lock.json
+      # the directory is `Backend` (capital B) — `./backend` does not exist on
+      # a case-sensitive runner and every step failed before it started
+      - working-directory: ./Backend
         run: npm install
-      - working-directory: ./backend
+      - working-directory: ./Backend
+        run: npm run typecheck
+      - working-directory: ./Backend
         run: npm test
-      - working-directory: ./backend
+      - working-directory: ./Backend
         run: npm run build

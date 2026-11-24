@@ -28,6 +28,21 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="caption-caps mb-1 mt-3 first:mt-0 font-bold text-black-ink/55">{children}</div>;
 }
 
+/** Decode a JWT and describe its expiry — module scope (the render-purity
+ *  rule allows `Date.now` outside component/hook bodies, like `relTime`). */
+function expiryLabel(token: string): string {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))) as {
+      exp?: number;
+      guest?: boolean;
+    };
+    const left = (payload.exp ?? 0) * 1000 - Date.now();
+    return left > 0 ? `expires in ${Math.max(1, Math.round(left / 60000))}m` : "EXPIRED — will be silently refreshed";
+  } catch {
+    return "unreadable";
+  }
+}
+
 /** Access-token facts for the info block — decoded from the JWT in memory,
  *  never printed in full (it's a bearer credential). */
 function useTokenFacts() {
@@ -35,19 +50,7 @@ function useTokenFacts() {
   const refreshToken = useAuth((s) => s.refreshToken);
   const user = useAuth((s) => s.user);
   return useMemo(() => {
-    let expLabel = "";
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))) as {
-          exp?: number;
-          guest?: boolean;
-        };
-        const left = (payload.exp ?? 0) * 1000 - Date.now();
-        expLabel = left > 0 ? `expires in ${Math.max(1, Math.round(left / 60000))}m` : "EXPIRED — will be silently refreshed";
-      } catch {
-        expLabel = "unreadable";
-      }
-    }
+    const expLabel = token ? expiryLabel(token) : "";
     return {
       hasToken: !!token,
       hasRefresh: !!refreshToken,

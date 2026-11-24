@@ -11,6 +11,33 @@ const KIND: Record<EdgeNode["kind"], { label: string; how: string; dot: string }
   query: { label: "DATABASE QUERY", how: "reads / writes data through", dot: "bg-emerald-500" },
 };
 
+/** One endpoint of a data flow — module scope so React never sees a
+ *  component being created during render (react-hooks rule). */
+function End({
+  id,
+  name,
+  meta,
+  onOpen,
+}: {
+  id: string;
+  name: string;
+  meta: string;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onOpen(id)}
+      title="Open this module's inspector"
+      className="flex w-full items-center gap-2 rounded-lg border border-black-ink/25 bg-paper-deep px-2 py-1.5 text-left transition-colors hover:border-signal hover:bg-signal/10"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-bold">{name}</span>
+        <span className="block truncate text-[10px] text-black-ink/55">{meta}</span>
+      </span>
+    </button>
+  );
+}
+
 /**
  * FLOW EDGE INSPECTOR — opened by clicking a data-flow bubble in the 3D city.
  * Names both endpoints (with their districts), says how they communicate, and
@@ -38,21 +65,6 @@ export function FlowEdgeCard() {
     setFocus(t.pos[0], t.pos[2]);
   };
 
-  const End = ({ id }: { id: string }) => (
-    <button
-      onClick={() => open(id)}
-      title="Open this module's inspector"
-      className="flex w-full items-center gap-2 rounded-lg border border-black-ink/25 bg-paper-deep px-2 py-1.5 text-left transition-colors hover:border-signal hover:bg-signal/10"
-    >
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-bold">{layout.byId.get(id)?.name}</span>
-        <span className="block truncate text-[10px] text-black-ink/55">
-          {layout.byId.get(id)?.districtName} · {layout.byId.get(id)?.kind}
-        </span>
-      </span>
-    </button>
-  );
-
   return (
     <div className="rounded-xl border-[1.5px] border-black-ink bg-paper p-3 text-xs shadow-[4px_4px_0_rgba(0,0,0,.35)]">
       <div className="flex items-start justify-between gap-2">
@@ -74,11 +86,21 @@ export function FlowEdgeCard() {
       </p>
 
       <div className="mt-2 grid gap-1">
-        <End id={a.id} />
+        <End
+          id={a.id}
+          name={a.name}
+          meta={`${a.districtName} · ${a.kind}`}
+          onOpen={open}
+        />
         <div className="flex items-center gap-1 pl-2 text-[10px] text-black-ink/45">
           <ArrowRight size={11} className="rotate-90" /> sends to
         </div>
-        <End id={b.id} />
+        <End
+          id={b.id}
+          name={b.name}
+          meta={`${b.districtName} · ${b.kind}`}
+          onOpen={open}
+        />
       </div>
 
       {routes.length > 0 && (
